@@ -114,7 +114,17 @@ codex() {
       command codex "\$@"
       ;;
     *)
-      command codex --remote '$endpoint' "\$@"
+      local codex_workdir_args=(-C "\$PWD")
+      local codex_arg
+      for codex_arg in "\$@"; do
+        case "\$codex_arg" in
+          -C|--cd|--cd=*)
+            codex_workdir_args=()
+            break
+            ;;
+        esac
+      done
+      command codex --remote '$endpoint' "\${codex_workdir_args[@]}" "\$@"
       ;;
   esac
 }
@@ -151,7 +161,15 @@ function codex
         case exec review mcp plugin mcp-server app-server remote-control app completion update doctor sandbox debug apply cloud exec-server features help
             command codex \$argv
         case '*'
-            command codex --remote '$endpoint' \$argv
+            set -l codex_workdir_args -C "\$PWD"
+            for codex_arg in \$argv
+                switch \$codex_arg
+                    case -C --cd '--cd=*'
+                        set codex_workdir_args
+                        break
+                end
+            end
+            command codex --remote '$endpoint' \$codex_workdir_args \$argv
     end
 end
 EOF

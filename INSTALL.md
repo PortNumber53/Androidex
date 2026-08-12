@@ -12,9 +12,10 @@ The production installation has three runtime pieces:
 2. A Codex `app-server` child process listening only on
    `ws://127.0.0.1:40002`.
 3. A shell function named `codex` that adds `--remote
-   ws://127.0.0.1:40002` to interactive Codex commands. Administrative commands
-   such as `codex login`, `codex auth`, `codex app-server`, and `codex exec`
-   continue to use the normal local CLI path.
+   ws://127.0.0.1:40002` and uses the invoking shell's current directory for
+   interactive Codex commands unless `-C` or `--cd` is supplied explicitly.
+   Administrative commands such as `codex login`, `codex auth`, `codex
+   app-server`, and `codex exec` continue to use the normal local CLI path.
 
 Vite is a build dependency, not a second production daemon. The installer runs
 `vite build`, and the Go process serves the resulting static UI on port `40001`.
@@ -239,12 +240,14 @@ for a process that uses that user's Codex authentication.
 ## Connecting terminal UIs
 
 After restarting a shell on the server, plain `codex` uses the shared local
-app-server because of the installed wrapper. `codex resume SESSION_ID` and the
-interactive session picker do as well. Administrative `codex login`, `codex
-logout`, and the newer `codex auth ...` command family still run through the
-local CLI. Login and logout actions then notify the bridge of the credential
-change. The bridge also watches the file-backed Codex auth cache for changes
-made outside a wrapped shell.
+app-server because of the installed wrapper and uses the shell's current
+directory as its working directory. An explicit `-C` or `--cd` still takes
+precedence. `codex resume SESSION_ID` and the interactive session picker use the
+shared app-server as well. Administrative `codex login`, `codex logout`, and the
+newer `codex auth ...` command family still run through the local CLI. Login and
+logout actions then notify the bridge of the credential change. The bridge also
+watches the file-backed Codex auth cache for changes made outside a wrapped
+shell.
 
 To connect a terminal UI from a different computer, tunnel the app-server rather
 than exposing it. This example maps client port `41002` to port `40002` on the

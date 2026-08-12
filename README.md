@@ -56,8 +56,10 @@ thread projection, preserving the order users see while a turn is running.
 All clients must connect to the same app-server process to share live state.
 Browser clients do this through the Go bridge. Terminal clients do it through
 Codex's `--remote` option or the shell wrapper installed by this project.
-The wrapper leaves both legacy `codex login`/`logout` commands and the newer
-`codex auth ...` command family on the local administrative CLI path.
+The wrapper passes the invoking shell's current directory as the remote Codex
+working directory unless the caller supplies `-C` or `--cd`. It leaves both
+legacy `codex login`/`logout` commands and the newer `codex auth ...` command
+family on the local administrative CLI path.
 
 Resuming the same stored thread with a standalone Codex process does not attach
 that process to the shared runtime. It creates a separate live session and will
