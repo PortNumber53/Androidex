@@ -1,136 +1,194 @@
-# Codex Local Web
+# Androidex
 
-Codex Local Web is a browser interface for a shared Codex runtime. It connects a
-React chat UI and official Codex terminal clients to the same Codex app-server so
-people can follow and control one conversation from multiple browsers and
-terminals in real time.
+Androidex is a self-hosted, multi-client interface for a shared Codex runtime.
+It lets you start a coding session in the React web app, continue it from the
+Flutter app, and join the same live conversation from the official Codex TUI.
 
-This project is useful when Codex runs on a workstation or development server
-but needs to remain accessible from another trusted machine. The browser talks
-only to the Go bridge; the underlying Codex app-server stays on loopback.
+The Go bridge keeps every client attached to one Codex `app-server`, so messages,
+streaming output, tool activity, approvals, authentication, and turn state stay
+synchronized in real time. Codex itself remains on the workstation or development
+server; clients connect over a trusted LAN, VPN, or SSH tunnel.
 
-## What it provides
+## Clients
 
-- Create, discover, and resume Codex threads across workspaces.
-- Stream assistant output, reasoning summaries, commands, tool activity, file
-  changes, interruptions, and turn status to every connected browser.
-- Keep multiple browser tabs and remote Codex terminal UIs synchronized through
-  one app-server process.
-- Answer command approvals, file-change approvals, permission requests, MCP
-  elicitations, and model questions from the browser or terminal.
-- Retain active-turn and pending-approval state after a browser refresh, including
-  the ability to interrupt a running turn.
-- Detect missing, expired, or externally cleared Codex authentication and
-  present the OpenAI device sign-in URL and one-time code directly in every
-  connected browser.
-- Select a workspace for a new conversation with server-backed path completion.
-- Serve the production React application directly from the Go binary's HTTP
-  server.
-- Use the native Flutter client in [`mobile/`](mobile/) to swipe horizontally
-  between full-screen sessions across workspaces while keeping an Android-safe
-  composer fixed at the bottom.
+| Client | Best for | Highlights |
+| --- | --- | --- |
+| React web app | Desktops and any device with a browser | Responsive chat UI, URL-addressable sessions, workspace selection, approvals, and device sign-in |
+| Flutter app | Phones and tablets | Swipeable sessions, searchable and reorderable session picker, keyboard-safe composer, split landscape layout, and Android background connectivity |
+| Codex TUI | Terminal workflows | Connects directly to the shared app-server through `codex --remote` or the installed shell wrapper |
+
+All three clients can participate in the same active conversation. Thread history
+continues to be stored and owned by Codex rather than Androidex.
+
+## Features
+
+### Shared Codex experience
+
+- Create, discover, rename, and resume sessions across multiple workspaces.
+- Stream assistant responses, reasoning summaries, command output, tool activity,
+  file changes, interruptions, and turn status as they happen.
+- Keep active turns and pending approvals available after a client reconnects.
+- Interrupt a running turn from the web app, Flutter app, or connected terminal.
+- Respond to command approvals, file-change approvals, permission requests, user
+  questions, and MCP elicitations away from the host machine.
+- Complete OpenAI device authentication from a connected client when the shared
+  Codex login is missing or expired.
+- Select new-conversation workspaces with server-backed path completion.
+
+### Web app
+
+- React 19 and Vite interface served directly by the Go service in production.
+- Explicit session URLs that restore the selected thread on refresh or sharing.
+- Session picker with active-state indicators and rename controls.
+- Markdown messages, copyable code blocks, and expandable command output.
+- Responsive layouts for desktop, tablet, and mobile browsers.
+- Real-time recovery of active turns and unresolved approval prompts without
+  interval polling.
+
+### Flutter app
+
+The Android-first Flutter client lives in [`mobile/`](mobile/). It uses the same
+bridge API and live protocol as the web app.
+
+- Swipe horizontally between full-screen sessions across all workspaces.
+- Search, rename, and drag to reorder sessions; custom ordering is persisted on
+  the device.
+- Keep separate message drafts per session while moving between conversations.
+- Use a fixed, safe-area-aware composer that stays above the Android keyboard and
+  becomes an interrupt control while Codex is working.
+- View Markdown responses, command results, live activity, and approval cards.
+- Use two independent conversation panes on wide landscape and tablet layouts.
+- Configure and persist the bridge URL from inside the app.
+- Optionally keep live WebSocket sessions connected in the Android background
+  through a foreground-service notification.
 
 ## Architecture
 
 ```text
- Browser A ─┐
- Browser B ─┼── HTTP + WebSocket ──> Go bridge ── WebSocket RPC ──> Codex app-server
- Browser C ─┘                              │                              ▲
-                                          │                              │
-                                          └── serves built React UI      │
-                                                                         │
- Codex TUI ─────────────────────────── codex --remote ────────────────────┘
+ React web app ───── HTTP + SSE + WebSocket ─┐
+                                             │
+ Flutter app ─────── HTTP + SSE + WebSocket ─┼──> Go bridge
+                                             │        │
+                                             │        ├── serves the built React app
+                                             │        │
+                                             │        └── WebSocket RPC ──> Codex app-server
+                                             │                                  ▲
+ Codex TUI ──────────────────────────────────┴──── codex --remote ───────────────┘
 ```
 
 The Go bridge starts a Codex app-server when none is available, or reconnects to
-an already-running compatible process. It translates browser actions into the
-app-server protocol and broadcasts Codex notifications and runtime snapshots to
-subscribed browsers.
+an already-running compatible process. It translates client actions into the
+app-server protocol and broadcasts notifications and runtime snapshots to every
+subscribed client.
 
-Thread history remains owned by Codex. The bridge supplements that history with
-live command and tool events that are not always present in the app-server's
-thread projection, preserving the order users see while a turn is running.
+Stored thread history is supplemented with live command and tool events that are
+not always present in the app-server's thread projection. This preserves the
+event order clients saw while a turn was running and allows state to be rebuilt
+after a reconnect.
 
-## Synchronization model
+## Repository layout
 
-All clients must connect to the same app-server process to share live state.
-Browser clients do this through the Go bridge. Terminal clients do it through
-Codex's `--remote` option or the shell wrapper installed by this project.
-The wrapper passes the invoking shell's current directory as the remote Codex
-working directory unless the caller supplies `-C` or `--cd`. It leaves both
-legacy `codex login`/`logout` commands and the newer `codex auth ...` command
-family on the local administrative CLI path.
-
-Resuming the same stored thread with a standalone Codex process does not attach
-that process to the shared runtime. It creates a separate live session and will
-not receive browser messages, approvals, or turn updates.
-
-When a browser reconnects, the bridge reads the stored thread and combines it
-with the current runtime snapshot. This restores working state, the active turn,
-and unresolved approval prompts without relying on interval polling.
-
-The base web URL never selects a recent thread automatically. Selecting or
-creating a thread adds its ID to the URL explicitly so refreshing that specific
-URL can restore the active runtime. Choosing **New conversation** returns to the
-unselected base URL.
-
-## Components
-
-| Component | Responsibility |
+| Path | Responsibility |
 | --- | --- |
-| `src/` | React chat interface, transcript rendering, workspace selection, and approval controls |
-| `server/` | Go HTTP/WebSocket bridge and Codex app-server protocol client |
-| `scripts/install.sh` | Generic Linux systemd-user and macOS LaunchAgent installation |
+| `src/` | React web interface, transcript rendering, session and workspace selection, and approval controls |
+| `mobile/` | Flutter client, shared API models, Android integration, and Flutter tests |
+| `server/` | Go HTTP/SSE/WebSocket bridge and Codex app-server protocol client |
+| `scripts/install.sh` | Linux systemd-user and macOS LaunchAgent installation |
 | `scripts/install-shell-wrapper.sh` | Idempotent zsh, bash, and fish integration for shared terminal sessions |
-| `INSTALL.md` | Complete installation, configuration, security, update, and troubleshooting runbook |
-
-In development, Vite serves the UI on port `40000` and proxies API traffic to
-the Go bridge on port `40001`. In production, Vite builds static assets and only
-the Go service runs. The shared Codex app-server listens on loopback port `40002`
-by default.
+| `INSTALL.md` | Production installation, configuration, security, updates, and troubleshooting |
 
 ## Development
 
-After completing the prerequisites and dependency setup in
-[INSTALL.md](INSTALL.md), start the backend and frontend in separate terminals:
+### Web app and bridge
+
+Install the Node dependencies, then start the Go bridge and Vite in separate
+terminals:
 
 ```bash
+npm ci
 npm run dev:server
+```
+
+```bash
 npm run dev
 ```
 
-The relevant package commands are:
+Open `http://localhost:40000`. Vite proxies API and WebSocket traffic to the Go
+bridge on port `40001`; the shared Codex app-server uses loopback port `40002` by
+default.
 
 | Command | Purpose |
 | --- | --- |
-| `npm run dev` | Start the Vite development UI |
+| `npm run dev` | Start the Vite development server |
 | `npm run dev:server` | Run the Go bridge from source |
 | `npm run build` | Build the production React assets |
-| `npm run server` | Run the Go bridge from source with the built UI |
+| `npm run server` | Run the bridge with the built web app |
 
-Development hostname configuration, production services, shell integration, and
-all environment variables are documented only in [INSTALL.md](INSTALL.md).
+### Flutter app
+
+Start the Go bridge first. The default Flutter configuration connects an Android
+emulator to the host at `http://10.0.2.2:40001`:
+
+```bash
+cd mobile
+flutter pub get
+flutter run
+```
+
+For a physical device, provide a bridge address reachable from that device:
+
+```bash
+flutter run --dart-define=CODEX_SERVER_URL=http://SERVER:40001
+```
+
+The address can also be changed later in the app's settings. Verify the Flutter
+client with:
+
+```bash
+flutter analyze
+flutter test
+```
+
+See [`mobile/README.md`](mobile/README.md) for Android networking and release
+build notes.
+
+## Shared terminal sessions
+
+All clients must connect to the same app-server process to share live state.
+Browser and Flutter clients do this through the Go bridge. Terminal clients use
+Codex's `--remote` option or the shell wrapper installed by Androidex.
+
+The wrapper sends the invoking shell's current directory as the remote Codex
+working directory unless `-C` or `--cd` is supplied. Administrative commands
+such as `codex login`, `codex logout`, `codex auth`, `codex app-server`, and
+`codex exec` continue to use the local CLI path.
+
+Resuming a stored thread with an independent Codex process does not join the
+shared runtime. That process will not receive Androidex messages, approvals, or
+live turn updates.
+
+## Installation
+
+See [`INSTALL.md`](INSTALL.md) for the complete deployment runbook. A production
+installation builds the React assets, installs the Go bridge as a user service,
+starts the loopback-only Codex app-server, and optionally adds the shared-runtime
+shell wrapper.
 
 ## Security
 
-Codex Local Web does not currently provide application-level authentication. The
-Go listener is intended for a trusted LAN or private VPN, and anyone who can
-reach it can interact with Codex using the service user's permissions and
-configured workspace.
+Androidex does not provide application-level access control. OpenAI device
+authentication authorizes the Codex account; it does not protect access to the
+Androidex web, API, or WebSocket endpoints.
 
-The app-server endpoint should remain on loopback and should never be exposed
-directly. Use an SSH tunnel when a terminal client on another machine needs to
-join the shared runtime. See [INSTALL.md](INSTALL.md) for the complete deployment
-and network-security checklist.
+Anyone who can reach the Go bridge can interact with Codex using the service
+user's permissions and configured workspaces. Expose port `40001` only on a
+trusted LAN or private VPN, or place an authenticated HTTPS reverse proxy in
+front of it. Keep the Codex app-server on loopback and never expose port `40002`
+directly. Remote terminal clients should reach it through an SSH tunnel.
 
 ## Project status
 
 Codex app-server's TCP WebSocket transport and remote terminal mode are
 experimental. Protocol changes in new Codex CLI releases may require bridge
-updates. The Go gateway is the only component designed to be reachable from
-other machines.
-
-## Installation
-
-See [INSTALL.md](INSTALL.md). It is intentionally self-contained so a human or AI
-installation agent can deploy the project without inspecting the source code.
+updates. The Go bridge is the only component intended to be reachable from other
+machines.
