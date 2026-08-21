@@ -19,7 +19,7 @@ void main() {
     expect(find.byType(PageView), findsOneWidget);
     expect(find.byType(PersistentActionBar), findsOneWidget);
     expect(find.byType(ComposerBar), findsOneWidget);
-    expect(find.text('Settings'), findsOneWidget);
+    expect(find.text('Account'), findsOneWidget);
     expect(find.text('Swipe sessions  ·  1 of 2'), findsOneWidget);
 
     await tester.tap(find.text('Sessions'));
@@ -87,11 +87,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Review backend changes'), findsOneWidget);
-    expect(find.text('Settings'), findsOneWidget);
+    expect(find.text('Account'), findsOneWidget);
     expect(find.text('Swipe sessions  ·  2 of 2'), findsOneWidget);
   });
 
-  testWidgets('settings remains available while the bridge is connecting', (
+  testWidgets('account menu exposes profile and settings while connecting', (
     tester,
   ) async {
     final controller = CodexController(
@@ -104,23 +104,48 @@ void main() {
 
     expect(find.text('Connecting to Codex…'), findsOneWidget);
     expect(find.byType(PersistentActionBar), findsOneWidget);
+    expect(find.text('Account'), findsOneWidget);
+
+    await tester.tap(find.text('Account'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Profile'), findsOneWidget);
     expect(find.text('Settings'), findsOneWidget);
 
     await tester.tap(find.text('Settings'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
 
+    expect(find.byType(ServerSettingsPage), findsOneWidget);
     expect(find.text('Codex server'), findsOneWidget);
     expect(find.text('Server URL'), findsOneWidget);
     expect(find.text('Keep connected in background'), findsOneWidget);
 
     await tester.tap(find.byType(Switch));
-    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Save settings'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(controller.backgroundConnectionEnabled, isFalse);
     expect(find.text('Settings updated.'), findsOneWidget);
+  });
+
+  testWidgets('account menu opens the profile page', (tester) async {
+    final controller = CodexController(preview: true);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(CodexMobileApp(controller: controller));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Account'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Profile'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ProfilePage), findsOneWidget);
+    expect(find.text('Shared Codex app-server account'), findsOneWidget);
+    expect(find.text('Signed in'), findsOneWidget);
+    expect(find.text('ChatGPT'), findsOneWidget);
+    expect(find.text('Connected · realtime reconnecting'), findsOneWidget);
   });
 
   testWidgets('session picker reorders without changing the selected session', (

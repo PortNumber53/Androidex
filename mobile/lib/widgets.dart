@@ -293,6 +293,7 @@ class PersistentActionBar extends StatelessWidget {
     required this.hasSessions,
     required this.onSessions,
     required this.onNew,
+    required this.onProfile,
     required this.onSettings,
   });
 
@@ -303,6 +304,7 @@ class PersistentActionBar extends StatelessWidget {
   final bool hasSessions;
   final VoidCallback onSessions;
   final VoidCallback onNew;
+  final VoidCallback onProfile;
   final VoidCallback onSettings;
 
   @override
@@ -405,7 +407,55 @@ class PersistentActionBar extends StatelessWidget {
               label: 'New',
               onPressed: ready && session?.working != true ? onNew : null,
             ),
-            action(icon: Icons.tune, label: 'Settings', onPressed: onSettings),
+            PopupMenuButton<String>(
+              tooltip: 'Account menu',
+              onSelected: (value) {
+                if (value == 'profile') {
+                  onProfile();
+                } else if (value == 'settings') {
+                  onSettings();
+                }
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  value: 'profile',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.account_circle_outlined),
+                    title: Text('Profile'),
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'settings',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.tune),
+                    title: Text('Settings'),
+                  ),
+                ),
+              ],
+              child: showLabels
+                  ? const Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.account_circle_outlined, size: 18),
+                          SizedBox(width: 8),
+                          Text('Account'),
+                          SizedBox(width: 2),
+                          Icon(Icons.arrow_drop_down, size: 18),
+                        ],
+                      ),
+                    )
+                  : const Padding(
+                      padding: EdgeInsets.all(8),
+                      child: Icon(Icons.account_circle_outlined),
+                    ),
+            ),
           ],
         );
       },
@@ -1775,6 +1825,221 @@ class ServerSettingsResult {
 
   final String url;
   final bool backgroundConnectionEnabled;
+}
+
+class ProfilePage extends StatelessWidget {
+  const ProfilePage({
+    super.key,
+    required this.auth,
+    required this.connection,
+    required this.socketConnected,
+    required this.serverUrl,
+  });
+
+  final AuthSnapshot auth;
+  final BridgeConnection connection;
+  final bool socketConnected;
+  final String serverUrl;
+
+  String get _connectionLabel => switch (connection) {
+    BridgeConnection.connecting => 'Connecting',
+    BridgeConnection.offline => 'Offline',
+    BridgeConnection.ready when socketConnected => 'Connected',
+    BridgeConnection.ready => 'Connected · realtime reconnecting',
+  };
+
+  String get _authLabel => auth.authenticated
+      ? 'Signed in'
+      : auth.pending
+      ? 'Sign-in pending'
+      : 'Sign-in required';
+
+  String _displayValue(String value) {
+    if (value.isEmpty) return 'Not reported';
+    if (value.toLowerCase() == 'chatgpt') return 'ChatGPT';
+    if (value.toLowerCase() == 'apikey') return 'API key';
+    return value
+        .split(RegExp(r'[_-]+'))
+        .where((part) => part.isNotEmpty)
+        .map(
+          (part) => '${part.substring(0, 1).toUpperCase()}${part.substring(1)}',
+        )
+        .join(' ');
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Profile')),
+    body: SafeArea(
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 18, 20, 32),
+        children: [
+          const CircleAvatar(
+            radius: 38,
+            backgroundColor: Color(0xFF294A38),
+            child: Icon(Icons.person_outline, color: _accent, size: 42),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            _authLabel,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Shared Codex app-server account',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: _muted),
+          ),
+          const SizedBox(height: 28),
+          _ProfileDetail(
+            icon: Icons.key_outlined,
+            label: 'Authentication',
+            value: _displayValue(auth.authMode),
+          ),
+          _ProfileDetail(
+            icon: Icons.workspace_premium_outlined,
+            label: 'Plan',
+            value: _displayValue(auth.planType),
+          ),
+          _ProfileDetail(
+            icon: Icons.cloud_done_outlined,
+            label: 'Connection',
+            value: _connectionLabel,
+          ),
+          _ProfileDetail(
+            icon: Icons.dns_outlined,
+            label: 'Server',
+            value: serverUrl,
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _ProfileDetail extends StatelessWidget {
+  const _ProfileDetail({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    margin: const EdgeInsets.only(bottom: 10),
+    child: ListTile(
+      leading: Icon(icon, color: _accent),
+      title: Text(label),
+      subtitle: Text(value, style: const TextStyle(color: _muted)),
+    ),
+  );
+}
+
+class ServerSettingsPage extends StatefulWidget {
+  const ServerSettingsPage({
+    super.key,
+    required this.initialUrl,
+    required this.initialBackgroundConnectionEnabled,
+  });
+
+  final String initialUrl;
+  final bool initialBackgroundConnectionEnabled;
+
+  @override
+  State<ServerSettingsPage> createState() => _ServerSettingsPageState();
+}
+
+class _ServerSettingsPageState extends State<ServerSettingsPage> {
+  late final TextEditingController url;
+  late bool backgroundConnectionEnabled;
+  String error = '';
+
+  @override
+  void initState() {
+    super.initState();
+    url = TextEditingController(text: widget.initialUrl);
+    backgroundConnectionEnabled = widget.initialBackgroundConnectionEnabled;
+  }
+
+  @override
+  void dispose() {
+    url.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final value = url.text.trim();
+    final parsed = Uri.tryParse(value);
+    if (parsed == null ||
+        !parsed.hasAuthority ||
+        (parsed.scheme != 'http' && parsed.scheme != 'https')) {
+      setState(() => error = 'Enter a complete http:// or https:// URL.');
+      return;
+    }
+    Navigator.pop(
+      context,
+      ServerSettingsResult(
+        url: value,
+        backgroundConnectionEnabled: backgroundConnectionEnabled,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Settings')),
+    body: SafeArea(
+      child: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          const Text(
+            'Codex server',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Use the Go bridge address reachable from this device. Android emulators use 10.0.2.2 for the development machine.',
+            style: TextStyle(color: _muted, height: 1.4),
+          ),
+          const SizedBox(height: 18),
+          TextField(
+            controller: url,
+            keyboardType: TextInputType.url,
+            autocorrect: false,
+            decoration: InputDecoration(
+              labelText: 'Server URL',
+              hintText: 'http://host:40001',
+              errorText: error.isEmpty ? null : error,
+            ),
+          ),
+          const SizedBox(height: 18),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: backgroundConnectionEnabled,
+            onChanged: (value) {
+              setState(() => backgroundConnectionEnabled = value);
+            },
+            title: const Text('Keep connected in background'),
+            subtitle: const Text(
+              'Shows an ongoing Android notification while Codex keeps live sessions connected.',
+              style: TextStyle(color: _muted, height: 1.35),
+            ),
+          ),
+          const SizedBox(height: 24),
+          FilledButton.icon(
+            onPressed: _save,
+            icon: const Icon(Icons.save_outlined),
+            label: const Text('Save settings'),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class ServerSettingsDialog extends StatefulWidget {

@@ -215,12 +215,13 @@ class _CodexHomeState extends State<CodexHome> {
   }
 
   Future<void> _showSettings() async {
-    final changed = await showDialog<ServerSettingsResult>(
-      context: context,
-      builder: (context) => ServerSettingsDialog(
-        initialUrl: widget.controller.serverUrl,
-        initialBackgroundConnectionEnabled:
-            widget.controller.backgroundConnectionEnabled,
+    final changed = await Navigator.of(context).push<ServerSettingsResult>(
+      MaterialPageRoute(
+        builder: (context) => ServerSettingsPage(
+          initialUrl: widget.controller.serverUrl,
+          initialBackgroundConnectionEnabled:
+              widget.controller.backgroundConnectionEnabled,
+        ),
       ),
     );
     if (changed == null || !mounted) return;
@@ -243,6 +244,19 @@ class _CodexHomeState extends State<CodexHome> {
         ).showSnackBar(SnackBar(content: Text(error.toString())));
       }
     }
+  }
+
+  Future<void> _showProfile() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (context) => ProfilePage(
+          auth: widget.controller.auth,
+          connection: widget.controller.connection,
+          socketConnected: widget.controller.socketConnected,
+          serverUrl: widget.controller.serverUrl,
+        ),
+      ),
+    );
   }
 
   Future<void> _send() async {
@@ -287,6 +301,7 @@ class _CodexHomeState extends State<CodexHome> {
                     controller: controller,
                     initialIndex: primaryIndex,
                     primary: true,
+                    onProfile: _showProfile,
                     onSettings: _showSettings,
                   ),
                 ),
@@ -297,6 +312,7 @@ class _CodexHomeState extends State<CodexHome> {
                     controller: controller,
                     initialIndex: secondaryIndex,
                     primary: false,
+                    onProfile: _showProfile,
                     onSettings: _showSettings,
                   ),
                 ),
@@ -319,6 +335,7 @@ class _CodexHomeState extends State<CodexHome> {
                 hasSessions: controller.sessions.isNotEmpty,
                 onSessions: _showSessions,
                 onNew: _newConversation,
+                onProfile: _showProfile,
                 onSettings: _showSettings,
               ),
               Expanded(
@@ -408,12 +425,14 @@ class _LandscapeConversationPane extends StatefulWidget {
     required this.controller,
     required this.initialIndex,
     required this.primary,
+    required this.onProfile,
     required this.onSettings,
   });
 
   final CodexController controller;
   final int initialIndex;
   final bool primary;
+  final VoidCallback onProfile;
   final VoidCallback onSettings;
 
   @override
@@ -612,6 +631,7 @@ class _LandscapeConversationPaneState
           hasSessions: controller.sessions.isNotEmpty,
           onSessions: _showSessions,
           onNew: _newConversation,
+          onProfile: widget.onProfile,
           onSettings: widget.onSettings,
         ),
         Expanded(
