@@ -31,7 +31,8 @@ class CodexMobileApp extends StatefulWidget {
   State<CodexMobileApp> createState() => _CodexMobileAppState();
 }
 
-class _CodexMobileAppState extends State<CodexMobileApp> {
+class _CodexMobileAppState extends State<CodexMobileApp>
+    with WidgetsBindingObserver {
   late final CodexController controller;
   late final bool ownsController;
 
@@ -40,11 +41,20 @@ class _CodexMobileAppState extends State<CodexMobileApp> {
     super.initState();
     ownsController = widget.controller == null;
     controller = widget.controller ?? CodexController();
+    WidgetsBinding.instance.addObserver(this);
     if (ownsController) unawaited(controller.initialize());
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(controller.appResumed());
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     if (ownsController) controller.dispose();
     super.dispose();
   }
@@ -197,6 +207,7 @@ class _CodexHomeState extends State<CodexHome> {
         selectedIndex: widget.controller.selectedIndex,
         onRename: widget.controller.renameSession,
         onReorder: widget.controller.reorderSessions,
+        onRefresh: widget.controller.refreshThreads,
         onNew: () {
           Navigator.pop(context);
           unawaited(_newConversation());
@@ -586,6 +597,7 @@ class _LandscapeConversationPaneState
         selectedIndex: _selectedIndex,
         onRename: widget.controller.renameSession,
         onReorder: widget.controller.reorderSessions,
+        onRefresh: widget.controller.refreshThreads,
         onNew: () {
           Navigator.pop(context);
           unawaited(_newConversation());

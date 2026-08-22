@@ -1326,6 +1326,7 @@ class SessionPickerSheet extends StatefulWidget {
     required this.onNew,
     required this.onRename,
     required this.onReorder,
+    required this.onRefresh,
   });
 
   final List<MobileSession> sessions;
@@ -1333,6 +1334,7 @@ class SessionPickerSheet extends StatefulWidget {
   final VoidCallback onNew;
   final Future<void> Function(MobileSession session, String name) onRename;
   final void Function(int oldIndex, int newIndex) onReorder;
+  final Future<void> Function() onRefresh;
 
   @override
   State<SessionPickerSheet> createState() => _SessionPickerSheetState();
@@ -1342,6 +1344,7 @@ class _SessionPickerSheetState extends State<SessionPickerSheet> {
   late final String _selectedSessionId;
   final TextEditingController _search = TextEditingController();
   String _query = '';
+  bool _refreshing = false;
 
   @override
   void initState() {
@@ -1354,6 +1357,7 @@ class _SessionPickerSheetState extends State<SessionPickerSheet> {
                 widget.sessions.length - 1,
               )]
               .localId;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
   }
 
   @override
@@ -1381,6 +1385,13 @@ class _SessionPickerSheetState extends State<SessionPickerSheet> {
         SnackBar(content: Text('Could not rename session: $error')),
       );
     }
+  }
+
+  Future<void> _refresh() async {
+    if (_refreshing) return;
+    setState(() => _refreshing = true);
+    await widget.onRefresh();
+    if (mounted) setState(() => _refreshing = false);
   }
 
   @override
@@ -1428,6 +1439,16 @@ class _SessionPickerSheetState extends State<SessionPickerSheet> {
                           fontWeight: FontWeight.w800,
                         ),
                       ),
+                    ),
+                    IconButton(
+                      onPressed: _refreshing ? null : _refresh,
+                      icon: _refreshing
+                          ? const SizedBox.square(
+                              dimension: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.refresh),
+                      tooltip: 'Refresh sessions',
                     ),
                     IconButton.filledTonal(
                       onPressed: widget.onNew,

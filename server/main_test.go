@@ -92,16 +92,83 @@ func TestAuthStateFromAccount(t *testing.T) {
 }
 
 func TestThreadListParamsCanSpanAllWorkspaces(t *testing.T) {
-	scoped := threadListParams("/workspace/project", false)
+	scoped := threadListParams("/workspace/project", false, "")
 	if scoped["cwd"] != "/workspace/project" {
 		t.Fatalf("scoped thread list lost its workspace: %#v", scoped)
 	}
-	all := threadListParams("/workspace/project", true)
+	all := threadListParams("/workspace/project", true, "page-2")
 	if _, exists := all["cwd"]; exists {
 		t.Fatalf("all-workspace thread list unexpectedly filters cwd: %#v", all)
 	}
-	if all["limit"] != 40 || all["sortDirection"] != "desc" {
+	if all["limit"] != 100 || all["sortDirection"] != "desc" || all["cursor"] != "page-2" {
 		t.Fatalf("all-workspace thread list lost paging options: %#v", all)
+	}
+}
+
+func TestListThreadsFetchesEveryPage(t *testing.T) {
+	received := make(chan map[string]any, 2)
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		for page := 0; page < 2; page++ {
+			_, payload, readErr := conn.Read(r.Context())
+			if readErr != nil {
+				return
+			}
+			var request envelope
+			if json.Unmarshal(payload, &request) != nil || request.Method != "thread/list" {
+				return
+			}
+			var params map[string]any
+			if json.Unmarshal(request.Params, &params) != nil {
+				return
+			}
+			received <- params
+			result := map[string]any{
+				"data":       []map[string]any{{"id": "thread-1", "name": "First"}},
+				"nextCursor": "page-2",
+			}
+			if page == 1 {
+				result = map[string]any{
+					"data": []map[string]any{
+						{"id": "thread-1", "name": "First duplicate"},
+						{"id": "thread-2", "name": "Second"},
+					},
+					"nextCursor": nil,
+				}
+			}
+			response, _ := json.Marshal(map[string]any{"id": json.RawMessage(request.ID), "result": result})
+			if conn.Write(r.Context(), websocket.MessageText, response) != nil {
+				return
+			}
+		}
+	}))
+	defer httpServer.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(httpServer.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+	codex := newCodex(conn, "ws://codex.test")
+	go codex.readLoop()
+
+	items, err := codex.listThreads(ctx, "/workspace/project", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 || items[0].ID != "thread-1" || items[1].ID != "thread-2" {
+		t.Fatalf("unexpected paginated threads: %#v", items)
+	}
+	first := <-received
+	second := <-received
+	if first["cursor"] != nil || second["cursor"] != "page-2" {
+		t.Fatalf("pagination cursors were not forwarded: first=%#v second=%#v", first, second)
 	}
 }
 

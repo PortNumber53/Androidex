@@ -80,6 +80,7 @@ class CodexController extends ChangeNotifier {
   StreamSubscription<dynamic>? _socketSubscription;
   Timer? _reconnectTimer;
   Timer? _healthTimer;
+  Future<void>? _threadsRefresh;
   bool _connectingSocket = false;
   bool _disposed = false;
   int _draftSequence = 0;
@@ -144,6 +145,19 @@ class CodexController extends ChangeNotifier {
     }
   }
 
+  Future<void> appResumed() async {
+    if (_preview || _disposed) return;
+    await refreshHealth(silent: true);
+    if (connection != BridgeConnection.ready) return;
+    await refreshThreads();
+    if (!socketConnected) {
+      await _connectSocket();
+    } else {
+      final threadId = selectedSession?.threadId ?? '';
+      if (threadId.isNotEmpty) subscribe(threadId);
+    }
+  }
+
   Future<void> refreshHealth({bool silent = false}) async {
     try {
       final data = await _api.health();
@@ -173,6 +187,19 @@ class CodexController extends ChangeNotifier {
   }
 
   Future<void> refreshThreads() async {
+    if (_preview || _disposed) return;
+    final current = _threadsRefresh;
+    if (current != null) return current;
+    final refresh = _refreshThreads();
+    _threadsRefresh = refresh;
+    try {
+      await refresh;
+    } finally {
+      if (identical(_threadsRefresh, refresh)) _threadsRefresh = null;
+    }
+  }
+
+  Future<void> _refreshThreads() async {
     if (connection != BridgeConnection.ready) return;
     try {
       final selectedSessionId = selectedSession?.localId ?? '';
@@ -596,6 +623,7 @@ class CodexController extends ChangeNotifier {
       if (session?.threadId.isNotEmpty == true) {
         subscribe(session!.threadId);
       }
+      unawaited(refreshThreads());
       _notify();
     } catch (error) {
       socketConnected = false;

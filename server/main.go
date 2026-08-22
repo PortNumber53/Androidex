@@ -1621,6 +1621,20 @@ type threadSummary struct {
 	CWD       string `json:"cwd,omitempty"`
 }
 
+type threadListItem struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Preview   string `json:"preview"`
+	UpdatedAt int64  `json:"updatedAt"`
+	Status    any    `json:"status"`
+	CWD       string `json:"cwd"`
+}
+
+type threadListPage struct {
+	Data       []threadListItem `json:"data"`
+	NextCursor string           `json:"nextCursor"`
+}
+
 type workspaceSuggestion struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
@@ -1809,7 +1823,7 @@ func (s *server) threads(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	allWorkspaces := r.URL.Query().Get("scope") == "all"
 	workspace := s.workspace
@@ -1821,26 +1835,15 @@ func (s *server) threads(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	var result struct {
-		Data []struct {
-			ID        string `json:"id"`
-			Name      string `json:"name"`
-			Preview   string `json:"preview"`
-			UpdatedAt int64  `json:"updatedAt"`
-			Status    any    `json:"status"`
-			CWD       string `json:"cwd"`
-		} `json:"data"`
-	}
-	listParams := threadListParams(workspace, allWorkspaces)
-	err := s.codex.call(ctx, "thread/list", listParams, &result)
+	items, err := s.codex.listThreads(ctx, workspace, allWorkspaces)
 	if err != nil {
 		http.Error(w, "list threads: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 
-	threads := make([]threadSummary, 0, len(result.Data))
-	seen := make(map[string]bool, len(result.Data))
-	for _, item := range result.Data {
+	threads := make([]threadSummary, 0, len(items))
+	seen := make(map[string]bool, len(items))
+	for _, item := range items {
 		title := strings.TrimSpace(item.Name)
 		if title == "" {
 			title = truncate(firstNonEmpty(item.Preview, "Untitled conversation"), 58)
@@ -1918,16 +1921,47 @@ func (s *server) threadName(w http.ResponseWriter, r *http.Request, threadID str
 	_ = json.NewEncoder(w).Encode(map[string]string{"threadId": threadID, "title": req.Name})
 }
 
-func threadListParams(workspace string, allWorkspaces bool) map[string]any {
+func threadListParams(workspace string, allWorkspaces bool, cursor string) map[string]any {
 	params := map[string]any{
-		"limit":         40,
+		"limit":         100,
 		"sortKey":       "updated_at",
 		"sortDirection": "desc",
 	}
 	if !allWorkspaces {
 		params["cwd"] = workspace
 	}
+	if cursor != "" {
+		params["cursor"] = cursor
+	}
 	return params
+}
+
+func (c *Codex) listThreads(ctx context.Context, workspace string, allWorkspaces bool) ([]threadListItem, error) {
+	items := make([]threadListItem, 0, 100)
+	seenThreads := make(map[string]bool)
+	seenCursors := make(map[string]bool)
+	cursor := ""
+	for {
+		var page threadListPage
+		if err := c.call(ctx, "thread/list", threadListParams(workspace, allWorkspaces, cursor), &page); err != nil {
+			return nil, err
+		}
+		for _, item := range page.Data {
+			if item.ID == "" || seenThreads[item.ID] {
+				continue
+			}
+			seenThreads[item.ID] = true
+			items = append(items, item)
+		}
+		if page.NextCursor == "" {
+			return items, nil
+		}
+		if page.NextCursor == cursor || seenCursors[page.NextCursor] {
+			return nil, errors.New("thread/list returned a repeated pagination cursor")
+		}
+		seenCursors[page.NextCursor] = true
+		cursor = page.NextCursor
+	}
 }
 
 func (s *server) threadHistory(w http.ResponseWriter, r *http.Request, threadID string) {
