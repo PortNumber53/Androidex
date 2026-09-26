@@ -1108,6 +1108,9 @@ class _ApprovalCardState extends State<ApprovalCard> {
                             setState(() => answers[question.id] = option.label),
                   style: OutlinedButton.styleFrom(
                     alignment: Alignment.centerLeft,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
                     backgroundColor: answers[question.id] == option.label
                         ? const Color(0xFF26372E)
                         : null,

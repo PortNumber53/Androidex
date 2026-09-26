@@ -900,6 +900,25 @@ func TestRefreshRuntimeClearsStaleWorkingState(t *testing.T) {
 	}
 }
 
+func TestLateItemNotificationDoesNotReactivateCompletedTurn(t *testing.T) {
+	codex := &Codex{hub: newSocketHub()}
+	codex.handleNotification("turn/started", json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1"}}`))
+	codex.handleNotification("turn/completed", json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}`))
+	codex.handleNotification("item/completed", json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","item":{"id":"item-1","type":"agentMessage","text":"Done"}}`))
+	if snapshot := codex.runtimeSnapshot("thread-1"); snapshot.Working {
+		t.Fatalf("late item reactivated completed turn: %#v", snapshot)
+	}
+}
+
+func TestCompletionForOlderTurnDoesNotClearNewTurn(t *testing.T) {
+	codex := &Codex{hub: newSocketHub()}
+	codex.setActiveTurn("thread-1", "turn-2", nil)
+	codex.handleNotification("turn/completed", json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}`))
+	if snapshot := codex.runtimeSnapshot("thread-1"); !snapshot.Working || snapshot.TurnID != "turn-2" {
+		t.Fatalf("old completion cleared newer turn: %#v", snapshot)
+	}
+}
+
 func TestServerRequestResolvedClearsApprovalAnsweredByAnotherClient(t *testing.T) {
 	codex := &Codex{
 		hub:    newSocketHub(),

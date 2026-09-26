@@ -176,6 +176,15 @@ class CodexController extends ChangeNotifier {
       connectionError = connection == BridgeConnection.ready
           ? ''
           : 'Codex app-server is unavailable.';
+      // Re-subscribing asks the bridge for authoritative runtime state. This
+      // repairs a missed idle/completion event without reloading transcripts.
+      if (connection == BridgeConnection.ready && socketConnected) {
+        for (final session in sessions) {
+          if (session.working || session.approvals.isNotEmpty) {
+            subscribe(session.threadId);
+          }
+        }
+      }
       _notify();
     } catch (error) {
       connection = BridgeConnection.offline;

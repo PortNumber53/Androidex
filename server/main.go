@@ -1318,11 +1318,15 @@ func (c *Codex) handleNotification(method string, raw json.RawMessage) {
 		_ = json.Unmarshal(raw, &params)
 		c.applyThreadStatus(base.ThreadID, params.Status)
 	case "turn/completed":
-		c.clearActiveTurn(base.ThreadID, base.TurnID)
-	default:
-		if base.TurnID != "" {
-			c.setActiveTurn(base.ThreadID, base.TurnID, nil)
+		var params struct {
+			Turn struct {
+				ID string `json:"id"`
+			} `json:"turn"`
 		}
+		_ = json.Unmarshal(raw, &params)
+		c.clearActiveTurn(base.ThreadID, firstNonEmpty(params.Turn.ID, base.TurnID))
+		// Item notifications can arrive after completion. Only explicit turn
+		// starts and thread status updates may mark a thread active.
 	}
 	c.rememberTimelineItem(method, base.ThreadID, base.TurnID, raw)
 	if method == "item/started" || method == "item/completed" || method == "item/commandExecution/outputDelta" || method == "turn/completed" {
