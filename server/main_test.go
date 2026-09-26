@@ -233,6 +233,100 @@ func TestRenameThreadUsesAppServerProtocol(t *testing.T) {
 	}
 }
 
+func TestParseSlashCommand(t *testing.T) {
+	tests := []struct {
+		input     string
+		name      string
+		arguments string
+	}{
+		{input: "/compact", name: "compact"},
+		{input: "  /REVIEW focus on auth  ", name: "review", arguments: "focus on auth"},
+	}
+	for _, test := range tests {
+		name, arguments, err := parseSlashCommand(test.input)
+		if err != nil || name != test.name || arguments != test.arguments {
+			t.Fatalf("parseSlashCommand(%q) = %q, %q, %v", test.input, name, arguments, err)
+		}
+	}
+	for _, input := range []string{"", "/", "compact"} {
+		if _, _, err := parseSlashCommand(input); err == nil {
+			t.Fatalf("parseSlashCommand(%q) unexpectedly succeeded", input)
+		}
+	}
+}
+
+func TestSlashCommandUsesNativeAppServerMethods(t *testing.T) {
+	received := make(chan envelope, 2)
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		for index := 0; index < 2; index++ {
+			_, payload, readErr := conn.Read(r.Context())
+			if readErr != nil {
+				return
+			}
+			var request envelope
+			if json.Unmarshal(payload, &request) != nil {
+				return
+			}
+			received <- request
+			result := map[string]any{}
+			if request.Method == "review/start" {
+				result = map[string]any{"reviewThreadId": "thread-1", "turn": map[string]string{"id": "turn-review"}}
+			}
+			response, _ := json.Marshal(map[string]any{"id": json.RawMessage(request.ID), "result": result})
+			if conn.Write(r.Context(), websocket.MessageText, response) != nil {
+				return
+			}
+		}
+	}))
+	defer httpServer.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(httpServer.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+	codex := newCodex(conn, "ws://codex.test")
+	codex.ready.Store(true)
+	go codex.readLoop()
+	s := &server{codex: codex}
+
+	for _, body := range []string{
+		`{"command":"/compact","threadId":"thread-1"}`,
+		`{"command":"/review focus on auth","threadId":"thread-1"}`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/commands", strings.NewReader(body))
+		recorder := httptest.NewRecorder()
+		s.slashCommand(recorder, req)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("command failed: %d %s", recorder.Code, recorder.Body.String())
+		}
+	}
+
+	compact := <-received
+	if compact.Method != "thread/compact/start" {
+		t.Fatalf("unexpected compact method: %s", compact.Method)
+	}
+	review := <-received
+	if review.Method != "review/start" {
+		t.Fatalf("unexpected review method: %s", review.Method)
+	}
+	var params map[string]any
+	if err := json.Unmarshal(review.Params, &params); err != nil {
+		t.Fatal(err)
+	}
+	target, _ := params["target"].(map[string]any)
+	if target["type"] != "custom" || target["instructions"] != "focus on auth" {
+		t.Fatalf("unexpected review target: %#v", target)
+	}
+}
+
 func TestRefreshAuthStartsDeviceLoginWhenRequired(t *testing.T) {
 	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)

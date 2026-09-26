@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'codex_controller.dart';
 import 'models.dart';
+import 'slash_commands.dart';
 
 const _muted = Color(0xFFA5ABB6);
 const _border = Color(0xFF2A2E37);
@@ -527,6 +528,60 @@ class ComposerBar extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 8),
+                ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: controller,
+                  builder: (context, value, _) {
+                    final matches = matchingSlashCommands(value.text);
+                    if (matches.isEmpty || working) {
+                      return const SizedBox.shrink();
+                    }
+                    return Container(
+                      key: const ValueKey('slash-command-menu'),
+                      width: double.infinity,
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.all(5),
+                      constraints: const BoxConstraints(maxHeight: 240),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF171A20),
+                        border: Border.all(color: _border),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: matches.length,
+                        itemBuilder: (context, index) {
+                          final command = matches[index];
+                          return Material(
+                            type: MaterialType.transparency,
+                            child: ListTile(
+                              dense: true,
+                              title: Text(
+                                command.label,
+                                style: const TextStyle(
+                                  fontFamily: 'monospace',
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              subtitle: Text(command.description),
+                              onTap: () {
+                                final replacement =
+                                    '${command.command}${command.usage.isEmpty ? '' : ' '}';
+                                controller.value = TextEditingValue(
+                                  text: replacement,
+                                  selection: TextSelection.collapsed(
+                                    offset: replacement.length,
+                                  ),
+                                );
+                                onChanged(replacement);
+                                focusNode.requestFocus();
+                              },
+                            ),
+                          );
+                        },
+                      ),
+                    );
+                  },
+                ),
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
@@ -720,21 +775,32 @@ class TranscriptItem extends StatelessWidget {
   Widget build(BuildContext context) {
     if (item.kind == 'command') return CommandCard(item: item);
     if (item.kind == 'notice') {
+      final noticeColor = item.error ? _danger : const Color(0xFFFFC46B);
       return Container(
         margin: const EdgeInsets.only(bottom: 16),
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: const Color(0xFF2A2117),
+          color: item.error ? const Color(0xFF2A181B) : const Color(0xFF2A2117),
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: const Color(0xFF5B4325)),
+          border: Border.all(
+            color: item.error
+                ? const Color(0xFF613038)
+                : const Color(0xFF5B4325),
+          ),
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Icon(Icons.info_outline, color: Color(0xFFFFC46B), size: 18),
+            Icon(Icons.info_outline, color: noticeColor, size: 18),
             const SizedBox(width: 10),
             Expanded(
-              child: Text(item.text, style: const TextStyle(height: 1.4)),
+              child: Text(
+                item.text,
+                style: TextStyle(
+                  height: 1.4,
+                  color: item.error ? _danger : null,
+                ),
+              ),
             ),
           ],
         ),
@@ -1397,7 +1463,7 @@ class _SessionPickerSheetState extends State<SessionPickerSheet> {
   @override
   Widget build(BuildContext context) {
     final query = _query.trim().toLowerCase();
-    final visibleSessions = <MapEntry<int, MobileSession>>[];
+    final matchingSessions = <MapEntry<int, MobileSession>>[];
     for (var index = 0; index < widget.sessions.length; index += 1) {
       final session = widget.sessions[index];
       final searchable = [
@@ -1406,9 +1472,17 @@ class _SessionPickerSheetState extends State<SessionPickerSheet> {
         session.preview,
       ].join('\n').toLowerCase();
       if (query.isEmpty || searchable.contains(query)) {
-        visibleSessions.add(MapEntry(index, session));
+        matchingSessions.add(MapEntry(index, session));
       }
     }
+    final groupedSessions = <String, List<MapEntry<int, MobileSession>>>{};
+    for (final entry in matchingSessions) {
+      final workspace = entry.value.workspace.trim();
+      groupedSessions.putIfAbsent(workspace, () => []).add(entry);
+    }
+    final visibleSessions = groupedSessions.values
+        .expand((sessions) => sessions)
+        .toList(growable: false);
     final filtering = query.isNotEmpty;
     final media = MediaQuery.of(context);
     final keyboardInset = media.viewInsets.bottom;
@@ -1500,7 +1574,21 @@ class _SessionPickerSheetState extends State<SessionPickerSheet> {
                         buildDefaultDragHandles: false,
                         onReorderItem: (oldIndex, newIndex) {
                           if (filtering) return;
-                          widget.onReorder(oldIndex, newIndex);
+                          if (oldIndex < 0 ||
+                              oldIndex >= visibleSessions.length) {
+                            return;
+                          }
+                          final targetIndex = newIndex.clamp(
+                            0,
+                            visibleSessions.length - 1,
+                          );
+                          final source = visibleSessions[oldIndex];
+                          final target = visibleSessions[targetIndex];
+                          if (source.value.workspace.trim() !=
+                              target.value.workspace.trim()) {
+                            return;
+                          }
+                          widget.onReorder(source.key, target.key);
                           setState(() {});
                         },
                         itemBuilder: (context, index) {
@@ -1513,12 +1601,76 @@ class _SessionPickerSheetState extends State<SessionPickerSheet> {
                               : session.preview.trim();
                           final selected =
                               session.localId == _selectedSessionId;
+                          final showWorkspaceHeader =
+                              index == 0 ||
+                              visibleSessions[index - 1].value.workspace
+                                      .trim() !=
+                                  workspace;
                           return Column(
                             key: ValueKey(session.localId),
                             children: [
+                              if (showWorkspaceHeader)
+                                Container(
+                                  key: ValueKey(
+                                    'session-workspace-${workspace.isEmpty ? 'unknown' : workspace}',
+                                  ),
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.fromLTRB(
+                                    18,
+                                    14,
+                                    18,
+                                    8,
+                                  ),
+                                  color: const Color(0xFF12151A),
+                                  child: Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.folder_outlined,
+                                        size: 17,
+                                        color: _accent,
+                                      ),
+                                      const SizedBox(width: 9),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              workspace.isEmpty
+                                                  ? 'Workspace not reported'
+                                                  : _workspaceName(workspace),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                            if (workspace.isNotEmpty)
+                                              Text(
+                                                workspace,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  color: _muted,
+                                                  fontSize: 11,
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                      Text(
+                                        '${groupedSessions[workspace]?.length ?? 0}',
+                                        style: const TextStyle(
+                                          color: _muted,
+                                          fontSize: 11,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
                               ListTile(
                                 selected: selected,
-                                isThreeLine: detail.isNotEmpty,
+                                isThreeLine: false,
                                 leading: CircleAvatar(
                                   backgroundColor: session.working
                                       ? const Color(0xFF294A38)
@@ -1536,28 +1688,13 @@ class _SessionPickerSheetState extends State<SessionPickerSheet> {
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                 ),
-                                subtitle: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      workspace.isEmpty
-                                          ? 'Workspace not reported'
-                                          : workspace,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        color: _accent,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                    if (detail.isNotEmpty)
-                                      Text(
+                                subtitle: detail.isEmpty
+                                    ? null
+                                    : Text(
                                         detail,
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
                                       ),
-                                  ],
-                                ),
                                 trailing: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [

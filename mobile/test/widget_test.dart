@@ -31,7 +31,7 @@ void main() {
         of: sessionPicker,
         matching: find.text('/workspace/androidex'),
       ),
-      findsNWidgets(2),
+      findsOneWidget,
     );
     expect(
       find.descendant(
@@ -89,6 +89,49 @@ void main() {
     expect(find.text('Review backend changes'), findsOneWidget);
     expect(find.text('Account'), findsOneWidget);
     expect(find.text('Swipe sessions  ·  2 of 2'), findsOneWidget);
+  });
+
+  testWidgets('composer offers slash command suggestions', (tester) async {
+    final controller = CodexController(preview: true);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(CodexMobileApp(controller: controller));
+    await tester.pumpAndSettle();
+    final composerField = find.descendant(
+      of: find.byType(ComposerBar),
+      matching: find.byType(TextField),
+    );
+
+    await tester.enterText(composerField, '/rev');
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('slash-command-menu')), findsOneWidget);
+    expect(find.text('/review [instructions]'), findsOneWidget);
+    expect(find.text('/compact'), findsNothing);
+  });
+
+  testWidgets('session picker groups sessions by working folder', (
+    tester,
+  ) async {
+    final controller = CodexController(preview: true);
+    addTearDown(controller.dispose);
+    controller.sessions.last.workspace = '/workspace/backend';
+
+    await tester.pumpWidget(CodexMobileApp(controller: controller));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Sessions'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('session-workspace-/workspace/androidex')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('session-workspace-/workspace/backend')),
+      findsOneWidget,
+    );
+    expect(find.text('/workspace/androidex'), findsOneWidget);
+    expect(find.text('/workspace/backend'), findsOneWidget);
   });
 
   testWidgets('account menu exposes profile and settings while connecting', (

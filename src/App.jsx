@@ -2,6 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 
 const THREAD_QUERY_PARAM = 'thread'
 const LEGACY_STORAGE_KEY = 'codex-local-thread'
+const SLASH_COMMANDS = [
+  { command: '/help', description: 'Show available commands' },
+  { command: '/new', usage: '[absolute path]', description: 'Start a new conversation' },
+  { command: '/rename', usage: '<name>', description: 'Rename this session' },
+  { command: '/compact', description: 'Compact this session context' },
+  { command: '/review', usage: '[instructions]', description: 'Review working changes' },
+  { command: '/status', description: 'Show session and workspace status' },
+]
 
 function threadFromLocation() {
   const threadId = new URLSearchParams(window.location.search).get(THREAD_QUERY_PARAM) || ''
@@ -27,9 +35,24 @@ function workspaceParent(path) {
   return `${normalized.slice(0, separator)}/`
 }
 
+function groupThreadsByWorkspace(threads) {
+  const groups = new Map()
+  for (const thread of threads) {
+    const path = thread.cwd?.trim() || ''
+    if (!groups.has(path)) groups.set(path, [])
+    groups.get(path).push(thread)
+  }
+  return [...groups].map(([path, items]) => ({ path, items }))
+}
+
+function parseSlashCommand(input) {
+  const match = input.trim().match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/)
+  return match ? { name: match[1].toLowerCase(), arguments: (match[2] || '').trim() } : null
+}
+
 function messagesMatch(left, right) {
   if (left.length !== right.length) return false
-  const fields = ['kind', 'id', 'role', 'text', 'command', 'cwd', 'output', 'status', 'exitCode', 'durationMs']
+  const fields = ['kind', 'id', 'role', 'text', 'title', 'command', 'cwd', 'output', 'status', 'exitCode', 'durationMs']
   return left.every((message, index) => fields.every(field => message[field] === right[index]?.[field]))
 }
 
@@ -136,7 +159,7 @@ function CommandCard({ item }) {
 
 function TranscriptItem({ item, index, isLast }) {
   if (item.kind === 'command') return <CommandCard item={item} />
-  if (item.kind === 'notice') return <div className="system-notice"><Icon name="alert" size={16} /><div><strong>Conversation interrupted</strong><span>{item.text.replace(/^Conversation interrupted\s*[—-]\s*/i, '')}</span></div></div>
+  if (item.kind === 'notice') return <div className={`system-notice ${item.error ? 'error' : ''}`}><Icon name="alert" size={16} /><div><strong>{item.title || 'Conversation interrupted'}</strong><span>{item.title ? item.text : item.text.replace(/^Conversation interrupted\s*[—-]\s*/i, '')}</span></div></div>
   return <article className={`message ${item.role} ${item.error ? 'error' : ''}`}>
     <div className="avatar">{item.role === 'user' ? 'Y' : <Icon name="spark" size={16} />}</div>
     <div className="message-body"><div className="message-meta">{item.role === 'user' ? 'You' : 'Codex'}</div>{item.text ? <RichText text={item.text} /> : (isLast && <div className="thinking"><i /><i /><i /></div>)}</div>
@@ -320,6 +343,7 @@ export default function App() {
   const [workspaceFocused, setWorkspaceFocused] = useState(false)
   const [workspaceSuggestionIndex, setWorkspaceSuggestionIndex] = useState(-1)
   const [workspaceSuggestionsLoading, setWorkspaceSuggestionsLoading] = useState(false)
+  const [commandMenuIndex, setCommandMenuIndex] = useState(0)
   const endRef = useRef(null)
   const textareaRef = useRef(null)
   const socketRef = useRef(null)
@@ -617,9 +641,14 @@ export default function App() {
     }
   }
 
-  const newChat = () => {
+  const newChat = (requestedWorkspace = '') => {
     if (working) return
-    const targetWorkspace = differentWorkspace ? workspaceInput.trim() : (defaultWorkspaceRef.current || defaultWorkspace)
+    const explicitWorkspace = typeof requestedWorkspace === 'string' ? requestedWorkspace.trim() : ''
+    const targetWorkspace = explicitWorkspace || (differentWorkspace ? workspaceInput.trim() : (defaultWorkspaceRef.current || defaultWorkspace))
+    if (explicitWorkspace && !explicitWorkspace.startsWith('/')) {
+      setWorkspaceError('Enter an absolute workspace path.')
+      return
+    }
     if (differentWorkspace && !targetWorkspace) {
       setWorkspaceError('Enter an absolute workspace path.')
       return
@@ -628,6 +657,8 @@ export default function App() {
     if (targetWorkspace) {
       workspaceRef.current = targetWorkspace
       setWorkspace(targetWorkspace)
+      setWorkspaceInput(targetWorkspace)
+      if (explicitWorkspace) setDifferentWorkspace(Boolean(defaultWorkspaceRef.current && targetWorkspace !== defaultWorkspaceRef.current))
       refreshThreads()
     }
     setMessages([])
@@ -641,9 +672,86 @@ export default function App() {
     textareaRef.current?.focus()
   }
 
+  const appendCommandNotice = (command, text, { error = false, title = 'Command' } = {}) => {
+    setMessages(current => [...current, { role: 'user', text: command }, { kind: 'notice', title, text, error }])
+  }
+
+  const runSlashCommand = async text => {
+    const parsed = parseSlashCommand(text)
+    if (!parsed) {
+      appendCommandNotice(text, 'Use /help to see the available commands.', { error: true, title: 'Invalid command' })
+      return
+    }
+    const { name, arguments: args } = parsed
+    if (name === 'help') {
+      appendCommandNotice(text, SLASH_COMMANDS.map(command => `${command.command}${command.usage ? ` ${command.usage}` : ''} — ${command.description}`).join('\n'), { title: 'Slash commands' })
+      return
+    }
+    if (name === 'new') {
+      newChat(args)
+      return
+    }
+    if (name === 'status') {
+      const state = workingRef.current ? 'Working' : 'Idle'
+      appendCommandNotice(text, `${state}\nWorkspace: ${workspaceRef.current || defaultWorkspaceRef.current || 'Not reported'}\nSession: ${threadIdRef.current || 'New conversation'}`, { title: 'Session status' })
+      return
+    }
+    if (name === 'rename') {
+      if (!threadIdRef.current || !args) {
+        appendCommandNotice(text, 'Usage: /rename <name>. Start the conversation before renaming it.', { error: true, title: 'Rename failed' })
+        return
+      }
+      try {
+        const response = await fetch(`/api/threads/${encodeURIComponent(threadIdRef.current)}/name`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: args }),
+        })
+        if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`)
+        appendCommandNotice(text, `Renamed this session to “${args}”.`, { title: 'Session renamed' })
+        refreshThreads()
+      } catch (error) {
+        appendCommandNotice(text, error.message, { error: true, title: 'Rename failed' })
+      }
+      return
+    }
+    if (name === 'compact' || name === 'review') {
+      if (!threadIdRef.current) {
+        appendCommandNotice(text, `Start the conversation before using /${name}.`, { error: true, title: 'Command unavailable' })
+        return
+      }
+      try {
+        const response = await fetch('/api/commands', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: text, threadId: threadIdRef.current }),
+        })
+        if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`)
+        const data = await response.json()
+        appendCommandNotice(text, data.message || `/${name} started.`, { title: name === 'review' ? 'Code review' : 'Context compaction' })
+        if (data.turnId) {
+          setTurnId(data.turnId)
+          workingRef.current = true
+          setWorking(true)
+          setActivity(name === 'review' ? 'Reviewing changes' : 'Working')
+        }
+      } catch (error) {
+        appendCommandNotice(text, error.message, { error: true, title: 'Command failed' })
+      }
+      return
+    }
+    appendCommandNotice(text, `Unknown command /${name}. Use /help to see the available commands.`, { error: true, title: 'Unknown command' })
+  }
+
   const send = async (preset) => {
     const text = (typeof preset === 'string' ? preset : input).trim()
     if (!text || working) return
+    if (text.startsWith('/')) {
+      setInput('')
+      await runSlashCommand(text)
+      textareaRef.current?.focus()
+      return
+    }
     const targetWorkspace = threadId ? '' : (differentWorkspace ? workspaceInput.trim() : (workspace || defaultWorkspaceRef.current || defaultWorkspace))
     if (!threadId && (!targetWorkspace || !targetWorkspace.startsWith('/'))) {
       setWorkspaceError('Enter an absolute workspace path before starting the conversation.')
@@ -779,18 +887,41 @@ export default function App() {
     }
   }
 
+  const commandQuery = input.startsWith('/') && !input.slice(1).includes(' ') && !input.includes('\n') ? input.slice(1).toLowerCase() : null
+  const commandSuggestions = commandQuery == null ? [] : SLASH_COMMANDS.filter(command => command.command.slice(1).startsWith(commandQuery))
+  const chooseCommand = command => {
+    const needsArguments = Boolean(command.usage)
+    const value = `${command.command}${needsArguments ? ' ' : ''}`
+    setInput(value)
+    setCommandMenuIndex(0)
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus()
+      textareaRef.current?.setSelectionRange(value.length, value.length)
+    })
+  }
+
   const keyDown = (event) => {
-    if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); send() }
+    if (commandSuggestions.length && event.key === 'ArrowDown') {
+      event.preventDefault()
+      setCommandMenuIndex(index => (index + 1) % commandSuggestions.length)
+    } else if (commandSuggestions.length && event.key === 'ArrowUp') {
+      event.preventDefault()
+      setCommandMenuIndex(index => (index - 1 + commandSuggestions.length) % commandSuggestions.length)
+    } else if (commandSuggestions.length && event.key === 'Tab') {
+      event.preventDefault()
+      chooseCommand(commandSuggestions[Math.min(commandMenuIndex, commandSuggestions.length - 1)])
+    } else if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); send() }
   }
 
   const authBlocked = status === 'ready' && auth.status !== 'authenticated'
   const displayStatus = status === 'ready' && authBlocked ? 'auth' : status
   const statusLabel = status !== 'ready' ? (status === 'offline' ? 'Codex offline' : 'Connecting…') : authBlocked ? 'Sign in required' : 'Codex connected'
+  const threadGroups = groupThreadsByWorkspace(threads)
 
   return <div className={`app ${sidebar ? '' : 'sidebar-closed'}`}>
     <aside>
       <div className="brand"><div className="brand-mark"><Icon name="terminal" size={18} /></div><span>Codex <em>local</em></span></div>
-      <button className="new-chat" onClick={newChat}><Icon name="plus" />New conversation</button>
+      <button className="new-chat" onClick={() => newChat()}><Icon name="plus" />New conversation</button>
       <div className="workspace-choice">
         <label><input type="checkbox" checked={differentWorkspace} onChange={event => {
           const checked = event.target.checked
@@ -811,16 +942,19 @@ export default function App() {
       <button className="workspace" onClick={() => openThread(threadId)} disabled={working || !threadId}><Icon name="code" /><div><strong>{workspaceName(workspace || defaultWorkspace)}</strong><span>{workspace || defaultWorkspace || 'Loading workspace…'}</span></div></button>
       <div className="nav-label recent-label"><span>RECENT SESSIONS</span><small>{threads.length}</small></div>
       <div className="thread-list">
-        {threads.map(thread => <div key={thread.id} className={`thread-row ${thread.id === threadId ? 'active' : ''}`}>
+        {threadGroups.map(group => <section className="thread-group" key={group.path || '__unknown__'}>
+          <div className="thread-group-label" title={group.path || 'Workspace not reported'}><span>{workspaceName(group.path || 'Workspace not reported')}</span><small>{group.items.length}</small><em>{group.path || 'Workspace not reported'}</em></div>
+          {group.items.map(thread => <div key={thread.id} className={`thread-row ${thread.id === threadId ? 'active' : ''}`}>
           <button className="thread-open" onClick={() => openThread(thread.id)} disabled={working} title={`${thread.title}\n${thread.cwd || 'Workspace not reported'}`}>
-            <span className="thread-copy"><strong>{loadingThread === thread.id ? 'Loading…' : thread.title}</strong><em>{thread.cwd || 'Workspace not reported'}</em></span>
+            <span className="thread-copy"><strong>{loadingThread === thread.id ? 'Loading…' : thread.title}</strong></span>
             <small>{new Date(thread.updatedAt * 1000).toLocaleDateString([], { month: 'short', day: 'numeric' })}</small>
           </button>
           <button className="thread-menu-toggle" type="button" aria-label={`Session menu for ${thread.title}`} aria-haspopup="menu" aria-expanded={threadMenu === thread.id} onClick={event => { event.stopPropagation(); setThreadMenu(current => current === thread.id ? '' : thread.id) }}>•••</button>
           {threadMenu === thread.id && <div className="thread-menu" role="menu" onClick={event => event.stopPropagation()}>
             <button type="button" role="menuitem" onClick={() => beginRename(thread)}>Rename session</button>
           </div>}
-        </div>)}
+          </div>)}
+        </section>)}
         {!threads.length && <p>No saved sessions yet</p>}
       </div>
       <div className="aside-spacer" />
@@ -848,7 +982,8 @@ export default function App() {
           {approvalError && <p className="approval-error">{approvalError}</p>}
         </div>}
         <div className={`composer ${working ? 'working' : ''}`}>
-          <textarea ref={textareaRef} value={input} onChange={e => setInput(e.target.value)} onKeyDown={keyDown} placeholder={authBlocked ? 'Sign in to OpenAI to chat with Codex' : 'Ask Codex to build, explain, or debug…'} rows={1} disabled={working || authBlocked} />
+          {commandSuggestions.length > 0 && <div id="slash-commands" className="slash-menu" role="listbox" aria-label="Slash commands">{commandSuggestions.map((command, index) => <button type="button" role="option" aria-selected={index === commandMenuIndex} className={index === commandMenuIndex ? 'active' : ''} key={command.command} onMouseDown={event => { event.preventDefault(); chooseCommand(command) }}><strong>{command.command}{command.usage ? ` ${command.usage}` : ''}</strong><span>{command.description}</span></button>)}</div>}
+          <textarea ref={textareaRef} value={input} onChange={e => { setInput(e.target.value); setCommandMenuIndex(0) }} onKeyDown={keyDown} placeholder={authBlocked ? 'Sign in to OpenAI to chat with Codex' : 'Ask Codex, or type / for commands…'} rows={1} disabled={working || authBlocked} aria-controls={commandSuggestions.length ? 'slash-commands' : undefined} />
           <div className="composer-row"><span>{authBlocked ? 'Authentication required' : '↵ send   ·   ⇧↵ new line'}</span>{working ? <button className="send stop" onClick={stop} aria-label="Stop"><Icon name="stop" size={16} /></button> : <button className="send" onClick={() => send()} disabled={!input.trim() || status !== 'ready' || authBlocked} aria-label="Send"><Icon name="send" size={17} /></button>}</div>
         </div>
         <p className="disclaimer">Codex can make mistakes. Review commands and file changes.</p>

@@ -5,6 +5,27 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile/codex_controller.dart';
 
 void main() {
+  test('handles local slash commands without starting model turns', () async {
+    final controller = CodexController(preview: true);
+    addTearDown(controller.dispose);
+    final session = controller.sessions.first;
+    final originalCount = session.messages.length;
+
+    await controller.sendMessage(session, '/status');
+
+    expect(session.messages, hasLength(originalCount + 2));
+    expect(session.messages[originalCount].text, '/status');
+    expect(session.messages.last.kind, 'notice');
+    expect(
+      session.messages.last.text,
+      contains('Workspace: /workspace/androidex'),
+    );
+
+    await controller.sendMessage(session, '/rename Slash-ready session');
+    expect(session.title, 'Slash-ready session');
+    expect(session.working, isFalse);
+  });
+
   test('foreground resume refreshes the complete session list', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     addTearDown(() => server.close(force: true));

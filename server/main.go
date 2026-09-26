@@ -1612,6 +1612,18 @@ type threadNameRequest struct {
 	Name string `json:"name"`
 }
 
+type slashCommandRequest struct {
+	Command  string `json:"command"`
+	ThreadID string `json:"threadId"`
+}
+
+type slashCommandResponse struct {
+	Command  string `json:"command"`
+	Message  string `json:"message"`
+	ThreadID string `json:"threadId,omitempty"`
+	TurnID   string `json:"turnId,omitempty"`
+}
+
 type threadSummary struct {
 	ID        string `json:"id"`
 	Title     string `json:"title"`
@@ -1919,6 +1931,95 @@ func (s *server) threadName(w http.ResponseWriter, r *http.Request, threadID str
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"threadId": threadID, "title": req.Name})
+}
+
+func parseSlashCommand(input string) (string, string, error) {
+	input = strings.TrimSpace(input)
+	if !strings.HasPrefix(input, "/") {
+		return "", "", errors.New("command must start with /")
+	}
+	parts := strings.Fields(input)
+	if len(parts) == 0 || len(parts[0]) == 1 {
+		return "", "", errors.New("command name is required")
+	}
+	name := strings.ToLower(strings.TrimPrefix(parts[0], "/"))
+	arguments := strings.TrimSpace(strings.TrimPrefix(input, parts[0]))
+	return name, arguments, nil
+}
+
+func (s *server) slashCommand(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req slashCommandRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024)).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	name, arguments, err := parseSlashCommand(req.Command)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if name != "compact" && name != "review" {
+		http.Error(w, "unsupported bridge command: /"+name, http.StatusBadRequest)
+		return
+	}
+	if len(req.ThreadID) == 0 || len(req.ThreadID) > 128 || strings.ContainsAny(req.ThreadID, `/\\`) {
+		http.Error(w, "a valid session is required", http.StatusBadRequest)
+		return
+	}
+	if !s.codex.ready.Load() {
+		http.Error(w, "codex app-server is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if s.codex.runtimeSnapshot(req.ThreadID).Working {
+		http.Error(w, "this thread already has an active turn", http.StatusConflict)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	response := slashCommandResponse{Command: name, ThreadID: req.ThreadID}
+	switch name {
+	case "compact":
+		if arguments != "" {
+			http.Error(w, "/compact does not accept arguments", http.StatusBadRequest)
+			return
+		}
+		if err := s.codex.call(ctx, "thread/compact/start", map[string]string{"threadId": req.ThreadID}, nil); err != nil {
+			http.Error(w, "compact thread: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		response.Message = "Compaction started."
+	case "review":
+		target := map[string]string{"type": "uncommittedChanges"}
+		if arguments != "" {
+			target = map[string]string{"type": "custom", "instructions": arguments}
+		}
+		var result struct {
+			ReviewThreadID string `json:"reviewThreadId"`
+			Turn           struct {
+				ID string `json:"id"`
+			} `json:"turn"`
+		}
+		params := map[string]any{"threadId": req.ThreadID, "target": target, "delivery": "inline"}
+		if err := s.codex.call(ctx, "review/start", params, &result); err != nil {
+			http.Error(w, "start review: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		response.Message = "Code review started."
+		response.TurnID = result.Turn.ID
+		if response.TurnID != "" {
+			s.codex.setActiveTurn(req.ThreadID, response.TurnID, nil)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 func threadListParams(workspace string, allWorkspaces bool, cursor string) map[string]any {
@@ -2418,6 +2519,7 @@ func main() {
 	mux.HandleFunc("/api/ws", s.websocket)
 	mux.HandleFunc("/api/threads", s.threads)
 	mux.HandleFunc("/api/threads/", s.threads)
+	mux.HandleFunc("/api/commands", s.slashCommand)
 	mux.HandleFunc("/api/chat", s.chat)
 	mux.HandleFunc("/api/interrupt", s.interrupt)
 	distPath, err := filepath.Abs(env("WEB_DIST", filepath.Join(appRoot, "dist")))

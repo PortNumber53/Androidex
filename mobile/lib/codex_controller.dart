@@ -9,6 +9,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'codex_api.dart';
 import 'models.dart';
+import 'slash_commands.dart';
 
 enum BridgeConnection { connecting, ready, offline }
 
@@ -401,6 +402,11 @@ class CodexController extends ChangeNotifier {
   Future<void> sendMessage(MobileSession session, String rawMessage) async {
     final message = rawMessage.trim();
     if (message.isEmpty || session.working || !auth.authenticated) return;
+    if (message.startsWith('/')) {
+      session.composerText = '';
+      await _runSlashCommand(session, message);
+      return;
+    }
     if (session.threadId.isEmpty &&
         (!session.workspace.startsWith('/') || session.workspace.isEmpty)) {
       session.error = 'Choose an absolute workspace path before sending.';
@@ -483,6 +489,127 @@ class CodexController extends ChangeNotifier {
         await loadSession(session, force: true);
       }
       await refreshThreads();
+    }
+  }
+
+  void _appendCommandNotice(
+    MobileSession session,
+    String command,
+    String message, {
+    bool error = false,
+  }) {
+    session.messages = [
+      ...session.messages,
+      ChatItem(role: 'user', text: command),
+      ChatItem(kind: 'notice', text: message, error: error),
+    ];
+    _notify();
+  }
+
+  Future<void> _runSlashCommand(MobileSession session, String command) async {
+    final parsed = parseSlashCommand(command);
+    if (parsed == null) {
+      _appendCommandNotice(
+        session,
+        command,
+        'Use /help to see the available commands.',
+        error: true,
+      );
+      return;
+    }
+    switch (parsed.name) {
+      case 'help':
+        _appendCommandNotice(session, command, slashCommandHelp);
+      case 'new':
+        final workspace = parsed.arguments.isEmpty
+            ? (session.workspace.isEmpty ? defaultWorkspace : session.workspace)
+            : parsed.arguments;
+        if (!workspace.startsWith('/')) {
+          _appendCommandNotice(
+            session,
+            command,
+            'Usage: /new [absolute path].',
+            error: true,
+          );
+          return;
+        }
+        createDraft(workspace);
+      case 'status':
+        _appendCommandNotice(
+          session,
+          command,
+          '${session.working ? 'Working' : 'Idle'}\nWorkspace: ${session.workspace.isEmpty ? 'Not reported' : session.workspace}\nSession: ${session.threadId.isEmpty ? 'New conversation' : session.threadId}',
+        );
+      case 'rename':
+        if (parsed.arguments.isEmpty || session.threadId.isEmpty) {
+          _appendCommandNotice(
+            session,
+            command,
+            'Usage: /rename <name>. Start the conversation before renaming it.',
+            error: true,
+          );
+          return;
+        }
+        try {
+          await renameSession(session, parsed.arguments);
+          _appendCommandNotice(
+            session,
+            command,
+            'Renamed this session to “${parsed.arguments}”.',
+          );
+        } catch (error) {
+          _appendCommandNotice(session, command, '$error', error: true);
+        }
+      case 'compact':
+      case 'review':
+        if (session.threadId.isEmpty) {
+          _appendCommandNotice(
+            session,
+            command,
+            'Start the conversation before using /${parsed.name}.',
+            error: true,
+          );
+          return;
+        }
+        if (_preview) {
+          _appendCommandNotice(
+            session,
+            command,
+            parsed.name == 'review'
+                ? 'Code review started.'
+                : 'Compaction started.',
+          );
+          return;
+        }
+        try {
+          final result = await _api.runCommand(session.threadId, command);
+          _appendCommandNotice(
+            session,
+            command,
+            jsonString(result['message']).isEmpty
+                ? '/${parsed.name} started.'
+                : jsonString(result['message']),
+          );
+          final turnId = jsonString(result['turnId']);
+          if (turnId.isNotEmpty) {
+            session.turnId = turnId;
+            session.working = true;
+            session.active = true;
+            session.activity = parsed.name == 'review'
+                ? 'Reviewing changes'
+                : 'Working';
+            _notify();
+          }
+        } catch (error) {
+          _appendCommandNotice(session, command, '$error', error: true);
+        }
+      default:
+        _appendCommandNotice(
+          session,
+          command,
+          'Unknown command /${parsed.name}. Use /help to see the available commands.',
+          error: true,
+        );
     }
   }
 

@@ -67,6 +67,24 @@ void main() {
     });
     expect(result['title'], 'Release planning');
   });
+
+  test('runs a slash command through the Go bridge', () async {
+    final client = _RequestCaptureClient(
+      '{"command":"review","message":"Code review started.","turnId":"turn-1"}',
+    );
+    final api = CodexApi('http://codex.test:40001', client: client);
+    addTearDown(api.close);
+
+    final result = await api.runCommand('thread-1', '/review focus on auth');
+
+    expect(client.request?.method, 'POST');
+    expect(client.request?.url.path, '/api/commands');
+    expect(jsonDecode((client.request as http.Request).body), {
+      'threadId': 'thread-1',
+      'command': '/review focus on auth',
+    });
+    expect(result['turnId'], 'turn-1');
+  });
 }
 
 class _FakeClient extends http.BaseClient {
