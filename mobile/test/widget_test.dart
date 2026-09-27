@@ -464,11 +464,39 @@ void main() {
 
       await tester.drag(firstTranscript, const Offset(0, 180));
       await tester.pumpAndSettle();
+      final readingOffset = firstPosition.pixels;
+      controller.sessions.first.messages.add(
+        const ChatItem(
+          role: 'assistant',
+          text: 'New content while reading older messages.',
+        ),
+      );
+      await controller.selectSession(0);
+      await tester.pumpAndSettle();
+      expect(firstPosition.pixels, closeTo(readingOffset, 1));
+      controller.sessions.first.messages.last = const ChatItem(
+        role: 'assistant',
+        text: 'New content while reading older messages. More streaming text.',
+      );
+      await controller.selectSession(0);
+      await tester.pumpAndSettle();
+      expect(firstPosition.pixels, closeTo(readingOffset, 1));
       tester.view.physicalSize = const Size(800, 400);
       await tester.pumpAndSettle();
 
       expect(firstPosition.pixels, lessThan(firstPosition.maxScrollExtent));
       expect(find.byTooltip('Scroll to latest'), findsOneWidget);
+      await tester.tap(find.byTooltip('Scroll to latest'));
+      await tester.pumpAndSettle();
+      controller.sessions.first.messages.add(
+        const ChatItem(
+          role: 'assistant',
+          text: 'Continue following new messages.',
+        ),
+      );
+      await controller.selectSession(0);
+      await tester.pumpAndSettle();
+      expect(firstPosition.pixels, closeTo(firstPosition.maxScrollExtent, 1));
     },
   );
 

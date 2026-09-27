@@ -51,6 +51,7 @@ class _SessionPageState extends State<SessionPage>
   bool _scrollAffordanceScheduled = false;
   bool _showScrollToBottom = false;
   bool _followLatest = false;
+  bool _userScrolledAway = false;
 
   @override
   bool get wantKeepAlive => true;
@@ -81,6 +82,7 @@ class _SessionPageState extends State<SessionPage>
 
   Future<void> _scrollToBottom() async {
     if (!_scroll.hasClients) return;
+    _userScrolledAway = false;
     _followLatest = true;
     await _scroll.animateTo(
       _scroll.position.maxScrollExtent,
@@ -137,15 +139,11 @@ class _SessionPageState extends State<SessionPage>
     if (count != _lastItemCount || textLength != _lastTextLength) {
       _lastItemCount = count;
       _lastTextLength = textLength;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_scroll.hasClients) {
-          _scroll.animateTo(
-            _scroll.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOut,
-          );
-        }
-      });
+      if (!_userScrolledAway &&
+          (!_scroll.hasClients || _scroll.position.extentAfter <= 48)) {
+        _followLatest = true;
+      }
+      _pinBottomAfterLayout();
     }
   }
 
@@ -167,9 +165,15 @@ class _SessionPageState extends State<SessionPage>
             children: [
               NotificationListener<UserScrollNotification>(
                 onNotification: (notification) {
+                  if (notification.depth != 0) return false;
                   if (notification.direction != ScrollDirection.idle) {
+                    _userScrolledAway = true;
                     _followLatest = false;
                     _pinToBottomDuringKeyboardOpen = false;
+                  } else if (_scroll.hasClients &&
+                      _scroll.position.extentAfter <= 48) {
+                    _userScrolledAway = false;
+                    _followLatest = true;
                   }
                   return false;
                 },
