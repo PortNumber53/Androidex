@@ -42,7 +42,7 @@ class SessionPage extends StatefulWidget {
 
 class _SessionPageState extends State<SessionPage>
     with AutomaticKeepAliveClientMixin<SessionPage> {
-  final ScrollController _scroll = ScrollController();
+  late final ScrollController _scroll;
   int _lastItemCount = 0;
   int _lastTextLength = 0;
   double _lastKeyboardInset = 0;
@@ -59,12 +59,31 @@ class _SessionPageState extends State<SessionPage>
   @override
   void initState() {
     super.initState();
+    _followLatest = widget.session.transcriptFollowLatest;
+    _userScrolledAway = widget.session.transcriptUserScrolledAway;
+    _scroll = ScrollController(
+      initialScrollOffset: widget.session.transcriptOffset,
+      keepScrollOffset: false,
+    );
     _scroll.addListener(_updateScrollAffordance);
     _updateScrollAffordanceAfterLayout();
+    if (_followLatest) _pinBottomAfterLayout();
+  }
+
+  void _rememberScrollState() {
+    widget.session.transcriptFollowLatest = _followLatest;
+    widget.session.transcriptUserScrolledAway = _userScrolledAway;
+    if (_scroll.hasClients) {
+      widget.session.transcriptOffset = _scroll.offset.clamp(
+        0.0,
+        double.infinity,
+      );
+    }
   }
 
   void _updateScrollAffordance() {
     if (!mounted || !_scroll.hasClients) return;
+    _rememberScrollState();
     final shouldShow = _scroll.position.extentAfter > 160;
     if (shouldShow != _showScrollToBottom) {
       setState(() => _showScrollToBottom = shouldShow);
@@ -84,6 +103,7 @@ class _SessionPageState extends State<SessionPage>
     if (!_scroll.hasClients) return;
     _userScrolledAway = false;
     _followLatest = true;
+    _rememberScrollState();
     await _scroll.animateTo(
       _scroll.position.maxScrollExtent,
       duration: const Duration(milliseconds: 260),
@@ -143,6 +163,7 @@ class _SessionPageState extends State<SessionPage>
           (!_scroll.hasClients || _scroll.position.extentAfter <= 48)) {
         _followLatest = true;
       }
+      _rememberScrollState();
       _pinBottomAfterLayout();
     }
   }
@@ -175,6 +196,7 @@ class _SessionPageState extends State<SessionPage>
                     _userScrolledAway = false;
                     _followLatest = true;
                   }
+                  _rememberScrollState();
                   return false;
                 },
                 child: NotificationListener<ScrollMetricsNotification>(

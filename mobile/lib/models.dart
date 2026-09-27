@@ -321,6 +321,11 @@ class MobileSession {
   String activity = '';
   String error = '';
   String composerText = '';
+  // Owned by the session so portrait/landscape view recreation does not reset
+  // the transcript's reading position or resume paused auto-scroll.
+  double transcriptOffset = 0;
+  bool transcriptFollowLatest = false;
+  bool transcriptUserScrolledAway = false;
   List<ChatItem> messages = [];
   List<ApprovalRequest> approvals = [];
   Set<String> decidingApprovals = {};

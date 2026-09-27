@@ -500,6 +500,56 @@ void main() {
     },
   );
 
+  testWidgets('paused transcript position survives rotation and new content', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(600, 1000);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    final controller = CodexController(preview: true);
+    addTearDown(controller.dispose);
+    final session = controller.sessions.first;
+    session.messages = List.generate(
+      50,
+      (index) => ChatItem(
+        role: 'assistant',
+        text: 'Transcript message $index to keep while rotating.',
+      ),
+    );
+    await tester.pumpWidget(CodexMobileApp(controller: controller));
+    await tester.pumpAndSettle();
+    ScrollPosition position() => tester
+        .widget<CustomScrollView>(find.byType(CustomScrollView).first)
+        .controller!
+        .position;
+    position().jumpTo(1000);
+    await tester.pumpAndSettle();
+    await tester.drag(
+      find.byType(CustomScrollView).first,
+      const Offset(0, 160),
+    );
+    await tester.pumpAndSettle();
+    final saved = position().pixels;
+    expect(saved, greaterThan(0));
+    expect(session.transcriptUserScrolledAway, isTrue);
+
+    tester.view.physicalSize = const Size(1200, 700);
+    await tester.pumpAndSettle();
+    expect(position().pixels, closeTo(saved, 1));
+    session.messages.add(
+      const ChatItem(role: 'assistant', text: 'New streaming reply'),
+    );
+    await controller.selectSession(0);
+    await tester.pumpAndSettle();
+    expect(position().pixels, closeTo(saved, 1));
+
+    tester.view.physicalSize = const Size(600, 1000);
+    await tester.pumpAndSettle();
+    expect(position().pixels, closeTo(saved, 1));
+    expect(session.transcriptFollowLatest, isFalse);
+  });
+
   testWidgets('large landscape displays show two independent conversations', (
     tester,
   ) async {
