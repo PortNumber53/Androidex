@@ -137,6 +137,13 @@ class _CodexHomeState extends State<CodexHome> {
   void _controllerChanged() {
     if (!mounted) return;
     _syncComposer();
+    if (!_pages.hasClients) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _pages.hasClients) {
+          _pages.jumpToPage(widget.controller.selectedIndex);
+        }
+      });
+    }
     if (_pages.hasClients) {
       final page = _pages.page;
       if (page != null &&
@@ -297,9 +304,7 @@ class _CodexHomeState extends State<CodexHome> {
         final primaryIndex = sessionCount == 0
             ? 0
             : controller.selectedIndex.clamp(0, sessionCount - 1);
-        final secondaryIndex = sessionCount < 2
-            ? primaryIndex
-            : (primaryIndex + 1) % sessionCount;
+        final secondaryIndex = controller.secondarySelectedIndex;
         return Scaffold(
           resizeToAvoidBottomInset: false,
           body: SafeArea(
@@ -548,7 +553,7 @@ class _LandscapeConversationPaneState
     if (widget.primary) {
       await widget.controller.selectSession(_selectedIndex);
     } else {
-      await widget.controller.openSession(session);
+      await widget.controller.selectSecondarySession(_selectedIndex);
     }
   }
 

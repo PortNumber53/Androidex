@@ -1483,10 +1483,22 @@ class _SessionPickerSheetState extends State<SessionPickerSheet> {
       final workspace = entry.value.workspace.trim();
       groupedSessions.putIfAbsent(workspace, () => []).add(entry);
     }
-    final visibleSessions = groupedSessions.values
-        .expand((sessions) => sessions)
-        .toList(growable: false);
-    final filtering = query.isNotEmpty;
+    final visibleSessions = [...matchingSessions]
+      ..sort((left, right) {
+        final a = left.value;
+        final b = right.value;
+        final aActive = a.active || a.working;
+        final bActive = b.active || b.working;
+        if (aActive != bActive) return aActive ? -1 : 1;
+        final folder = a.workspace.trim().toLowerCase().compareTo(
+          b.workspace.trim().toLowerCase(),
+        );
+        if (folder != 0) return folder;
+        final exactFolder = a.workspace.trim().compareTo(b.workspace.trim());
+        if (exactFolder != 0) return exactFolder;
+        final title = a.title.toLowerCase().compareTo(b.title.toLowerCase());
+        return title != 0 ? title : a.localId.compareTo(b.localId);
+      });
     final media = MediaQuery.of(context);
     final keyboardInset = media.viewInsets.bottom;
     final preferredHeight = media.size.height * .68;
@@ -1546,7 +1558,7 @@ class _SessionPickerSheetState extends State<SessionPickerSheet> {
                   decoration: InputDecoration(
                     hintText: 'Search sessions',
                     prefixIcon: const Icon(Icons.search),
-                    suffixIcon: filtering
+                    suffixIcon: query.isNotEmpty
                         ? IconButton(
                             onPressed: () {
                               _search.clear();
@@ -1572,28 +1584,8 @@ class _SessionPickerSheetState extends State<SessionPickerSheet> {
                           ),
                         ),
                       )
-                    : ReorderableListView.builder(
+                    : ListView.builder(
                         itemCount: visibleSessions.length,
-                        buildDefaultDragHandles: false,
-                        onReorderItem: (oldIndex, newIndex) {
-                          if (filtering) return;
-                          if (oldIndex < 0 ||
-                              oldIndex >= visibleSessions.length) {
-                            return;
-                          }
-                          final targetIndex = newIndex.clamp(
-                            0,
-                            visibleSessions.length - 1,
-                          );
-                          final source = visibleSessions[oldIndex];
-                          final target = visibleSessions[targetIndex];
-                          if (source.value.workspace.trim() !=
-                              target.value.workspace.trim()) {
-                            return;
-                          }
-                          widget.onReorder(source.key, target.key);
-                          setState(() {});
-                        },
                         itemBuilder: (context, index) {
                           final entry = visibleSessions[index];
                           final originalIndex = entry.key;
@@ -1606,6 +1598,11 @@ class _SessionPickerSheetState extends State<SessionPickerSheet> {
                               session.localId == _selectedSessionId;
                           final showWorkspaceHeader =
                               index == 0 ||
+                              (visibleSessions[index - 1].value.active ||
+                                      visibleSessions[index - 1]
+                                          .value
+                                          .working) !=
+                                  (session.active || session.working) ||
                               visibleSessions[index - 1].value.workspace
                                       .trim() !=
                                   workspace;
@@ -1662,7 +1659,7 @@ class _SessionPickerSheetState extends State<SessionPickerSheet> {
                                         ),
                                       ),
                                       Text(
-                                        '${groupedSessions[workspace]?.length ?? 0}',
+                                        '${groupedSessions[workspace]?.where((entry) => (entry.value.active || entry.value.working) == (session.active || session.working)).length ?? 0}',
                                         style: const TextStyle(
                                           color: _muted,
                                           fontSize: 11,
@@ -1724,23 +1721,6 @@ class _SessionPickerSheetState extends State<SessionPickerSheet> {
                                         ),
                                       ],
                                     ),
-                                    if (!filtering)
-                                      ReorderableDragStartListener(
-                                        index: index,
-                                        child: const Tooltip(
-                                          message: 'Reorder session',
-                                          child: Padding(
-                                            padding: EdgeInsets.symmetric(
-                                              horizontal: 8,
-                                              vertical: 12,
-                                            ),
-                                            child: Icon(
-                                              Icons.drag_handle,
-                                              color: _muted,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
                                   ],
                                 ),
                                 onTap: () =>

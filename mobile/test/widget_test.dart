@@ -31,7 +31,7 @@ void main() {
         of: sessionPicker,
         matching: find.text('/workspace/androidex'),
       ),
-      findsOneWidget,
+      findsNWidgets(2),
     );
     expect(
       find.descendant(
@@ -191,42 +191,56 @@ void main() {
     expect(find.text('Connected · realtime reconnecting'), findsOneWidget);
   });
 
-  testWidgets('session picker reorders without changing the selected session', (
-    tester,
-  ) async {
-    final controller = CodexController(preview: true);
-    addTearDown(controller.dispose);
+  testWidgets(
+    'session picker sorts active then folder then title without changing selection',
+    (tester) async {
+      final controller = CodexController(preview: true);
+      addTearDown(controller.dispose);
+      controller.sessions.first
+        ..title = 'Z active'
+        ..workspace = '/z';
+      controller.sessions.last
+        ..title = 'Zulu'
+        ..workspace = '/a';
+      controller.sessions.add(
+        MobileSession(localId: 'alpha', title: 'Alpha', workspace: '/a'),
+      );
 
-    await tester.pumpWidget(CodexMobileApp(controller: controller));
-    await tester.pumpAndSettle();
+      await tester.pumpWidget(CodexMobileApp(controller: controller));
+      await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Sessions'));
-    await tester.pumpAndSettle();
+      await tester.tap(find.text('Sessions'));
+      await tester.pumpAndSettle();
 
-    final picker = find.byType(SessionPickerSheet);
-    final reorderable = tester.widget<ReorderableListView>(
-      find.descendant(of: picker, matching: find.byType(ReorderableListView)),
-    );
-    reorderable.onReorderItem!(0, 1);
-    await tester.pumpAndSettle();
+      final picker = find.byType(SessionPickerSheet);
+      final tiles = tester
+          .widgetList<ListTile>(
+            find.descendant(of: picker, matching: find.byType(ListTile)),
+          )
+          .where((tile) => tile.title is Text)
+          .toList();
+      expect(tiles.map((tile) => (tile.title as Text).data), [
+        'Z active',
+        'Alpha',
+        'Zulu',
+      ]);
+      expect(controller.sessions.first.title, 'Z active');
+      expect(controller.selectedSession?.title, 'Z active');
+      expect(find.byTooltip('Reorder session'), findsNothing);
+      final selectedTile = tester
+          .widgetList<ListTile>(
+            find.descendant(of: picker, matching: find.byType(ListTile)),
+          )
+          .where((tile) => tile.selected);
+      expect(selectedTile, hasLength(1));
 
-    expect(controller.sessions.first.title, 'Review backend changes');
-    expect(controller.sessions.last.title, 'Build the mobile client');
-    expect(controller.selectedSession?.title, 'Build the mobile client');
-    expect(find.byTooltip('Reorder session'), findsNWidgets(2));
-    final selectedTile = tester
-        .widgetList<ListTile>(
-          find.descendant(of: picker, matching: find.byType(ListTile)),
-        )
-        .where((tile) => tile.selected);
-    expect(selectedTile, hasLength(1));
+      Navigator.of(tester.element(picker)).pop();
+      await tester.pumpAndSettle();
 
-    Navigator.of(tester.element(picker)).pop();
-    await tester.pumpAndSettle();
-
-    final pages = tester.widget<PageView>(find.byType(PageView)).controller!;
-    expect(pages.page, closeTo(1, .01));
-  });
+      final pages = tester.widget<PageView>(find.byType(PageView)).controller!;
+      expect(pages.page, closeTo(0, .01));
+    },
+  );
 
   testWidgets('session picker searches and selects original session indices', (
     tester,
@@ -289,7 +303,7 @@ void main() {
 
     final list = find.descendant(
       of: find.byType(SessionPickerSheet),
-      matching: find.byType(ReorderableListView),
+      matching: find.byType(ListView),
     );
     expect(list, findsOneWidget);
     expect(
@@ -321,7 +335,7 @@ void main() {
 
     final list = find.descendant(
       of: find.byType(SessionPickerSheet),
-      matching: find.byType(ReorderableListView),
+      matching: find.byType(ListView),
     );
     expect(list, findsOneWidget);
     expect(tester.getBottomRight(list).dy, lessThanOrEqualTo(480));

@@ -2174,7 +2174,21 @@ func mergeTimelineOrder(persisted, live []historyMessage) []historyMessage {
 	emitted := make(map[string]bool, len(persisted)+len(live))
 	liveCursor := 0
 	appendVisible := func(item historyMessage) {
-		if item.Kind == "marker" || (item.ID != "" && emitted[item.ID]) {
+		if item.Kind == "marker" {
+			if strings.TrimSpace(item.Text) == "" {
+				return
+			}
+			switch item.ItemType {
+			case "agentMessage":
+				item.Role = "assistant"
+			case "userMessage":
+				item.Role = "user"
+			default:
+				return
+			}
+			item.Kind = ""
+		}
+		if item.ID != "" && emitted[item.ID] {
 			return
 		}
 		if item.ID != "" {
@@ -2209,6 +2223,11 @@ func mergeTimelineOrder(persisted, live []historyMessage) []historyMessage {
 		if live[match].Kind == "command" && persistedItem.Kind == "command" {
 			appendVisible(live[match])
 		} else {
+			// A history read can lag the stream even when it already contains
+			// the item. Do not truncate a reply to its earlier saved prefix.
+			if live[match].ItemType == "agentMessage" && strings.HasPrefix(live[match].Text, persistedItem.Text) {
+				persistedItem.Text = live[match].Text
+			}
 			appendVisible(persistedItem)
 		}
 		liveCursor = match + 1

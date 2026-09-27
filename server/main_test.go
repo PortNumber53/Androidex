@@ -618,6 +618,28 @@ func TestLiveTimelinePlacesCommandsBetweenPersistedMessages(t *testing.T) {
 	}
 }
 
+func TestHistoryRetainsStreamedReplyUntilPersistenceCatchesUp(t *testing.T) {
+	codex := &Codex{}
+	codex.rememberTimelineItem("item/completed", "thread-1", "turn-1", json.RawMessage(`{"item":{"type":"agentMessage","id":"reply-1","text":"The complete reply."}}`))
+	for _, tc := range []struct {
+		name  string
+		items []json.RawMessage
+	}{
+		{"missing", nil},
+		{"empty", []json.RawMessage{json.RawMessage(`{"type":"agentMessage","id":"reply-1","text":""}`)}},
+		{"partial", []json.RawMessage{json.RawMessage(`{"type":"agentMessage","id":"reply-1","text":"The complete"}`)}},
+		{"persisted", []json.RawMessage{json.RawMessage(`{"type":"agentMessage","id":"reply-1","text":"The complete reply."}`)}},
+		{"different persisted ID", []json.RawMessage{json.RawMessage(`{"type":"agentMessage","id":"saved-1","text":"The complete reply."}`)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			messages := normalizeHistoryWithRich([]threadTurn{{ID: "turn-1", Status: "completed", Items: tc.items}}, codex.richSnapshot("thread-1"))
+			if len(messages) != 1 || messages[0].Role != "assistant" || messages[0].Text != "The complete reply." || messages[0].Kind == "marker" {
+				t.Fatalf("reply disappeared, regressed, or duplicated: %#v", messages)
+			}
+		})
+	}
+}
+
 func TestApprovalResponsesMatchProtocolVersion(t *testing.T) {
 	modern := pendingApproval{
 		Method:  "item/commandExecution/requestApproval",

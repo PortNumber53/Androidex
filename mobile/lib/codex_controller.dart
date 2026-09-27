@@ -87,6 +87,51 @@ class CodexController extends ChangeNotifier {
   int _draftSequence = 0;
   String _serverUrl;
   final List<String> _sessionOrder = [];
+  String _primarySessionId = '';
+  String _secondarySessionId = '';
+
+  String get _selectionPreference => 'codex_selected_sessions:$_serverUrl';
+
+  int get secondarySelectedIndex {
+    final saved = sessions.indexWhere(
+      (session) =>
+          session.threadId == _secondarySessionId ||
+          session.localId == _secondarySessionId,
+    );
+    if (_secondarySessionId.isNotEmpty && saved >= 0) return saved;
+    return sessions.length < 2
+        ? selectedIndex
+        : (selectedIndex + 1) % sessions.length;
+  }
+
+  void _restoreSelection() {
+    final saved = _preferences?.getStringList(_selectionPreference) ?? const [];
+    _primarySessionId = saved.isNotEmpty ? saved[0] : '';
+    _secondarySessionId = saved.length > 1 ? saved[1] : '';
+  }
+
+  Future<void> _persistSelection() async {
+    String persistedId(String id) {
+      final match = sessions
+          .where((session) => session.localId == id || session.threadId == id)
+          .firstOrNull;
+      return match == null ? id : match.threadId;
+    }
+
+    await _preferences?.setStringList(_selectionPreference, [
+      persistedId(_primarySessionId),
+      persistedId(_secondarySessionId),
+    ]);
+  }
+
+  Future<void> selectSecondarySession(int index) async {
+    if (sessions.isEmpty) return;
+    final session = sessions[index.clamp(0, sessions.length - 1)];
+    _secondarySessionId = session.localId;
+    await _persistSelection();
+    _notify();
+    await openSession(session);
+  }
 
   BridgeConnection connection = BridgeConnection.connecting;
   AuthSnapshot auth = const AuthSnapshot();
@@ -120,6 +165,7 @@ class CodexController extends ChangeNotifier {
       _serverUrl = saved;
       _api = CodexApi(_serverUrl);
     }
+    _restoreSelection();
     await reconnect();
     _healthTimer = Timer.periodic(
       const Duration(seconds: 10),
@@ -212,7 +258,7 @@ class CodexController extends ChangeNotifier {
   Future<void> _refreshThreads() async {
     if (connection != BridgeConnection.ready) return;
     try {
-      final selectedSessionId = selectedSession?.localId ?? '';
+      final selectedSessionId = selectedSession?.localId ?? _primarySessionId;
       final data = await _api.threads(all: true);
       if (defaultWorkspace.isEmpty) {
         defaultWorkspace = jsonString(data['workspace']);
@@ -249,7 +295,9 @@ class CodexController extends ChangeNotifier {
       }
       _applySessionOrder();
       final restoredIndex = sessions.indexWhere(
-        (session) => session.localId == selectedSessionId,
+        (session) =>
+            session.localId == selectedSessionId ||
+            session.threadId == selectedSessionId,
       );
       selectedIndex = restoredIndex >= 0
           ? restoredIndex
@@ -265,6 +313,8 @@ class CodexController extends ChangeNotifier {
     if (sessions.isEmpty) return;
     selectedIndex = index.clamp(0, sessions.length - 1);
     final session = sessions[selectedIndex];
+    _primarySessionId = session.localId;
+    await _persistSelection();
     _notify();
     await openSession(session);
   }
@@ -360,7 +410,12 @@ class CodexController extends ChangeNotifier {
       workspace.trim().isEmpty ? defaultWorkspace : workspace.trim(),
       notify: false,
     );
-    if (select) selectedIndex = sessions.indexOf(draft);
+    if (select) {
+      selectedIndex = sessions.indexOf(draft);
+      _primarySessionId = draft.localId;
+    } else {
+      _secondarySessionId = draft.localId;
+    }
     _notify();
     return draft;
   }
@@ -451,6 +506,7 @@ class CodexController extends ChangeNotifier {
               if (workspace.isNotEmpty) session.workspace = workspace;
               subscribe(threadId);
               if (becamePersisted) unawaited(_persistSessionOrder());
+              if (becamePersisted) unawaited(_persistSelection());
             }
           case 'delta':
             session.activity = '';
@@ -688,6 +744,7 @@ class CodexController extends ChangeNotifier {
     await _preferences?.setString(_serverPreference, normalized);
     sessions.clear();
     selectedIndex = 0;
+    _restoreSelection();
     auth = const AuthSnapshot();
     await reconnect();
   }
@@ -927,15 +984,20 @@ class CodexController extends ChangeNotifier {
           _ => session.activity,
         };
       case 'item/completed' when jsonString(item['type']) == 'agentMessage':
+        final itemId = jsonString(item['id']);
+        final text = jsonString(item['text']);
         final index = session.messages.indexWhere(
-          (message) => message.liveItemId == jsonString(item['id']),
+          (message) =>
+              itemId.isNotEmpty &&
+              (message.liveItemId == itemId || message.id == itemId),
         );
-        if (index >= 0) {
-          session.messages[index] = ChatItem(
-            role: 'assistant',
-            text: jsonString(item['text']),
-            id: jsonString(item['id']),
-          );
+        if (text.isNotEmpty) {
+          final completed = ChatItem(role: 'assistant', text: text, id: itemId);
+          if (index >= 0) {
+            session.messages[index] = completed;
+          } else {
+            session.messages.add(completed);
+          }
         }
       case 'turn/completed':
         session.working = false;
@@ -977,7 +1039,7 @@ class CodexController extends ChangeNotifier {
     var index = itemId.isEmpty
         ? -1
         : session.messages.indexWhere(
-            (message) => message.liveItemId == itemId,
+            (message) => message.liveItemId == itemId || message.id == itemId,
           );
     if (index < 0 &&
         session.messages.isNotEmpty &&

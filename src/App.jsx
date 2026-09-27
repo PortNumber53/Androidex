@@ -39,10 +39,15 @@ function groupThreadsByWorkspace(threads) {
   const groups = new Map()
   for (const thread of threads) {
     const path = thread.cwd?.trim() || ''
-    if (!groups.has(path)) groups.set(path, [])
-    groups.get(path).push(thread)
+    const active = Boolean(thread.active)
+    const key = JSON.stringify([active, path])
+    if (!groups.has(key)) groups.set(key, { key, path, active, items: [] })
+    groups.get(key).items.push(thread)
   }
-  return [...groups].map(([path, items]) => ({ path, items }))
+  const compare = (a, b) => a.toLowerCase().localeCompare(b.toLowerCase()) || a.localeCompare(b)
+  return [...groups.values()]
+    .sort((a, b) => Number(b.active) - Number(a.active) || compare(a.path, b.path))
+    .map(group => ({ ...group, items: group.items.sort((a, b) => compare(a.title || '', b.title || '') || compare(a.id, b.id)) }))
 }
 
 function parseSlashCommand(input) {
@@ -942,7 +947,7 @@ export default function App() {
       <button className="workspace" onClick={() => openThread(threadId)} disabled={working || !threadId}><Icon name="code" /><div><strong>{workspaceName(workspace || defaultWorkspace)}</strong><span>{workspace || defaultWorkspace || 'Loading workspace…'}</span></div></button>
       <div className="nav-label recent-label"><span>RECENT SESSIONS</span><small>{threads.length}</small></div>
       <div className="thread-list">
-        {threadGroups.map(group => <section className="thread-group" key={group.path || '__unknown__'}>
+        {threadGroups.map(group => <section className="thread-group" key={group.key}>
           <div className="thread-group-label" title={group.path || 'Workspace not reported'}><span>{workspaceName(group.path || 'Workspace not reported')}</span><small>{group.items.length}</small><em>{group.path || 'Workspace not reported'}</em></div>
           {group.items.map(thread => <div key={thread.id} className={`thread-row ${thread.id === threadId ? 'active' : ''}`}>
           <button className="thread-open" onClick={() => openThread(thread.id)} disabled={working} title={`${thread.title}\n${thread.cwd || 'Workspace not reported'}`}>
